@@ -1,0 +1,8 @@
+system_id: bookchaowalit-backend/book-backend/book-identity-platform
+prefix: CARD
+brand: "BOOK IDENTITY PLATFORM"
+subtitle: "ขอบเขต contract ของ platform `identity` ยังไม่มี runtime"
+footer: "Book Identity Platform — Product Card"
+color: "#2f4b6e"
+audience: internal
+tier: L0
