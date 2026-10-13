@@ -2,10 +2,10 @@
   "$schema": "./schema/book-platform.contract.v1.schema.json",
   "schema_version": "book-platform.contract.v1",
   "platform_id": "identity",
-  "repository": "book-identity-platform",
+  "repository": "platform-identity",
   "status": "scaffolded",
   "api_version": "v1",
-  "data_owner": "book-identity-platform",
+  "data_owner": "platform-identity",
   "capabilities": [
     "authentication",
     "tenant",

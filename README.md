@@ -1,4 +1,4 @@
-# book-identity-platform
+# platform-identity
 
 `Identity` platform boundary for the Book Platform portfolio.
 
@@ -12,8 +12,8 @@ provider integration, database writer, credential, or customer payload.
 ## Boundary
 
 - Owner: `bookchaowalit-backend`
-- Repository: `book-identity-platform`
-- Target remote: `https://github.com/bookchaowalit-backend/book-identity-platform.git` (published; runtime not activated)
+- Repository: `platform-identity`
+- Target remote: `https://github.com/bookchaowalit-backend/platform-identity.git` (published; runtime not activated)
 - Contract: `book-platform.contract.v1`
 - Status: `scaffolded`
 - Data owner: the platform boundary identified in `contract.json`
