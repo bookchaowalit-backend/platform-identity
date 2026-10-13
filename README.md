@@ -55,7 +55,8 @@ readiness.
 Dependencies: none. The interfaces this boundary owns or consumes, with
 their auth, idempotency and error behaviour, are listed in
 [`docs/CONTRACT-SURFACE.md`](docs/CONTRACT-SURFACE.md). Planned work is tracked
-in [`docs/UPGRADE-PLAN.md`](docs/UPGRADE-PLAN.md).
+in [`docs/UPGRADE-PLAN.md`](docs/UPGRADE-PLAN.md). The target service design and migration order
+are in [`docs/DESIGN-2026-10-13.md`](docs/DESIGN-2026-10-13.md) (draft, pending owner review).
 
 ## Migration gate
 
