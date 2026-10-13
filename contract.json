@@ -15,13 +15,15 @@
   ],
   "depends_on": [],
   "current_implementation": {
-    "repository": "solo-empire",
-    "source_path": "infra/api/server.ts",
+    "repository": "platform-empire",
+    "source_path": "services/platform/platform_api/routes.py",
     "source_paths": [
-      "infra/api/server.ts",
-      "infra/api/auth.ts"
+      "services/platform/platform_api/routes.py",
+      "src/empire_platform/jwks.py",
+      "services/platform/migrations/0001_platform_core.sql",
+      "services/platform/migrations/0003_authorization_decision_point.sql"
     ],
-    "source_status": "current-implementation-in-solo-empire"
+    "source_status": "adjacent-domain-repository"
   },
   "migration": {
     "compatibility_adapter": "required",
@@ -37,28 +39,48 @@
   "surface_doc": "docs/CONTRACT-SURFACE.md",
   "interfaces": [
     {
-      "id": "identity.http.bearer-auth",
+      "id": "identity.http.jwks",
       "kind": "http",
       "direction": "provides",
-      "name": "Authorization: Bearer <token> validation for /api/* (requireAuth)",
-      "status": "current-in-solo-empire",
-      "source": "infra/api/auth.ts"
+      "name": "GET /.well-known/jwks.json: RS256 verification keys (RFC 7517, kid = RFC 7638 thumbprint)",
+      "status": "pilot",
+      "source": "src/empire_platform/jwks.py",
+      "auth": "public"
     },
     {
-      "id": "identity.config.scoped-tokens",
-      "kind": "config",
+      "id": "identity.http.authz-decide",
+      "kind": "http",
       "direction": "provides",
-      "name": "API_TOKENS_JSON scoped token registry (subject, token_hash, scopes, expires_at)",
-      "status": "current-in-solo-empire",
-      "source": "infra/api/auth.ts"
+      "name": "POST /v1/authz/decide: recorded allow/deny/require_approval decision for the caller's workspace",
+      "status": "pilot",
+      "source": "services/platform/platform_api/routes.py",
+      "auth": "bearer JWT, audience platform-api"
     },
     {
-      "id": "identity.config.legacy-token",
-      "kind": "config",
+      "id": "identity.table.workspace-rbac",
+      "kind": "table",
       "direction": "provides",
-      "name": "API_TOKEN legacy full-scope token and ALLOW_UNAUTH_DEV local switch",
-      "status": "current-in-solo-empire",
-      "source": "infra/api/auth.ts"
+      "name": "identities, workspaces, memberships, roles, role_permissions, membership_roles, policies, delegations (forced RLS on app.workspace_id)",
+      "status": "pilot",
+      "source": "services/platform/migrations/0001_platform_core.sql"
+    },
+    {
+      "id": "identity.http.token-exchange",
+      "kind": "http",
+      "direction": "provides",
+      "name": "POST /v1/token: RFC 8693-shaped exchange of a provider id_token, API key or empire-mcp token for an audience-bound access token",
+      "status": "planned",
+      "source": "src/empire_platform/token_exchange.py",
+      "auth": "subject token"
+    },
+    {
+      "id": "identity.http.workspace-admin",
+      "kind": "http",
+      "direction": "provides",
+      "name": "/v1/workspaces, members, roles, api-keys and delegations administration",
+      "status": "planned",
+      "source": "none",
+      "auth": "bearer JWT with identity.*:admin"
     }
   ]
 }

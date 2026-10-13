@@ -5,8 +5,8 @@
 ## Scope
 
 This repository owns the `identity` capability: authentication, tenant, membership, RBAC, API keys.
-The current source implementation is recorded as `infra/api/server.ts` and
-`infra/api/auth.ts` in the parent registry. This checkout is a local scaffold; it contains no production
+The current implementation lives in `platform-empire`
+(`services/platform/platform_api/routes.py`, `src/empire_platform/jwks.py`). This checkout is a local scaffold; it contains no production
 provider integration, database writer, credential, or customer payload.
 
 ## Boundary
