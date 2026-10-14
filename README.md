@@ -50,6 +50,34 @@ The check validates repository shape and contract metadata only. It does not
 claim deployment, provider connectivity, data migration, or production
 readiness.
 
+## Service (migration step 3: shadow)
+
+`src/platform_identity/` is the identity service (Python, FastAPI). In step 3
+it runs beside `platform-empire` without taking over anything:
+
+- `POST /v1/authz/decide` takes the same body and platform tokens as the
+  platform endpoint and calls the same `platform.authorize` as database role
+  `identity_api`; in `shadow` mode the transaction is rolled back, so nothing
+  is recorded twice. `platform-empire` mirrors each answered decision here when
+  its `IDENTITY_SHADOW_URL` is set and logs `identity_shadow outcome=match|mismatch`.
+- `POST /v1/token` exchanges a Google id_token (owner decision D3: Google
+  proves who a person is; this service stores no password) for an access token
+  bound to one audience and one workspace, signed with this service's own key.
+  No cell trusts that key or issuer until the cutover (step 6).
+- `GET /.well-known/jwks.json` and `/.well-known/openid-configuration`.
+
+Configuration is listed in [`src/platform_identity/config.py`](src/platform_identity/config.py);
+secrets (database URL, signing key) come only from the runtime environment.
+
+```bash
+python -m pip install -e ".[dev]"
+python -m unittest discover -s tests      # contract checks + service tests
+identity-api                              # needs the IDENTITY_* variables
+```
+
+The parity test against the real decision point lives in `platform-empire`
+(`tests/test_identity_shadow.py`), which runs this service on its test database.
+
 ## Contract surface
 
 Dependencies: none. The interfaces this boundary owns or consumes, with

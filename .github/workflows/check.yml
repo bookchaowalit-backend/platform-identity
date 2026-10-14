@@ -35,3 +35,22 @@ jobs:
 
       - name: Run offline contract check and tests
         run: bash scripts/check.sh
+
+  service:
+    name: Service tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the service
+        run: python -m pip install -e ".[dev]"
+
+      - name: Run service tests
+        run: python -m unittest discover -s tests -v
