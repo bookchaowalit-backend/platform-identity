@@ -1,0 +1,14 @@
+# Railway (Singapore, always on): platform-identity, migration step 3 (shadow).
+# Secrets (IDENTITY_DATABASE_URL, IDENTITY_SIGNING_KEY_PEM) are Railway variables only.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[deploy.multiRegionConfig.asia-southeast1-eqsg3a]
+numReplicas = 1
