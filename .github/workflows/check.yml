@@ -28,11 +28,15 @@ jobs:
       format-check: false
       # [tool.mypy] covers src/ only; tests and scripts are not typed yet.
       typecheck-command: uv pip install "mypy==2.4.0" && mypy
-      # Same gates as before: offline contract check, schema pin, then every test (service tests use a fake database).
+      # Shared admission tests (runtime_tests/) need a real disposable PostgreSQL; the shared workflow exports DATABASE_URL.
+      postgres: true
+      # Same gates as before: offline contract check, schema pin, every unittest (service tests use a fake database),
+      # then the shared PostgreSQL admission tests against the disposable database.
       test-command: >-
         python scripts/check.py
         && python scripts/check_schema_pin.py
         && python -m unittest discover -s tests -v
+        && PLATFORM_TEST_DSN="$DATABASE_URL" python -m pytest -q runtime_tests
 
   security:
     uses: bookchaowalit/platform-ci-workflows/.github/workflows/security.yml@87dc5e1c7e0416886a6371d5a101bb2ccba38edd # v1.1.1

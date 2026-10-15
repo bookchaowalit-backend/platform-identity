@@ -66,6 +66,12 @@ it runs beside `platform-empire` without taking over anything:
   No cell trusts that key or issuer until the cutover (step 6).
 - `GET /.well-known/jwks.json` and `/.well-known/openid-configuration`.
 
+Staged replicas can explicitly opt into shared PostgreSQL token admission and
+server-owned RBAC scope mappings. Defaults retain local limiting and the current
+shadow authorization/issuer profile. [`docs/SHARED-RATE-LIMIT.md`](docs/SHARED-RATE-LIMIT.md)
+documents configuration, separate migration/runtime roles, trusted proxies,
+readiness, tests and activation gates. No migration runs during startup.
+
 Configuration is listed in [`src/platform_identity/config.py`](src/platform_identity/config.py);
 secrets (database URL, signing key) come only from the runtime environment.
 
