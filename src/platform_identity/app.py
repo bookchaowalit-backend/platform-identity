@@ -14,12 +14,13 @@
 from __future__ import annotations
 
 import logging
+import ipaddress
 import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, asynccontextmanager
 from typing import Annotated, Any, Literal
 
 import psycopg
@@ -33,6 +34,8 @@ from pydantic import BaseModel, Field
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
+from platform_identity.rate_limit import RateLimitUnavailable
+from platform_identity.config import validate_shared_scope_permissions
 
 log = logging.getLogger("platform_identity")
 
@@ -84,13 +87,28 @@ class RateLimiter:
             return True
 
 
-def client_address(request: Request) -> str:
-    """The address the edge proxy saw: the last ``X-Forwarded-For`` hop, which the client cannot choose."""
+def client_address(request: Request, *, trusted_proxies: tuple[str, ...] | None = None) -> str:
+    """Explicit staged proxy trust; None preserves the legacy local profile."""
     forwarded = request.headers.get("x-forwarded-for", "")
-    hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
-    if hops:
-        return hops[-1][:64]
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    if trusted_proxies is None:
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        return hops[-1][:64] if hops else peer
+    networks = tuple(ipaddress.ip_network(network) for network in trusted_proxies)
+    try:
+        address = ipaddress.ip_address(peer)
+        if not any(address in network for network in networks) or len(forwarded) > 2048:
+            return peer
+        hops = [hop.strip() for hop in forwarded.split(',')]
+        if not forwarded or len(hops) > 32:
+            return peer
+        addresses = [ipaddress.ip_address(hop) for hop in hops]
+        for address in reversed(addresses):
+            if not any(address in network for network in networks):
+                return str(address)
+        return str(addresses[0])
+    except ValueError:
+        return peer
 
 
 def _token_error(status: int, error: str, description: str) -> HTTPException:
@@ -98,13 +116,44 @@ def _token_error(status: int, error: str, description: str) -> HTTPException:
                          headers={"Cache-Control": "no-store"})
 
 
-def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: TokenVerifier, signing_key: SigningKey,
+def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platform_verifier: TokenVerifier, signing_key: SigningKey,
                issuer: str, google: Any, token_audiences: frozenset[str], decide_mode: str = "shadow",
-               clock: Callable[[], float] = time.time) -> FastAPI:
+               clock: Callable[[], float] = time.time, rate_limiter: Any = None,
+               trusted_proxies: tuple[str, ...] | None = None, connection_pool: Any = None,
+               shared_scope_permissions: Mapping[str,str] | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
-    app = FastAPI(title="platform-identity", version="0.1.0", docs_url=None, redoc_url=None)
-    limiter = RateLimiter(TOKEN_REQUESTS_PER_MINUTE)
+    if connect is None and connection_pool is None:
+        raise ValueError('a database connection source is required')
+    if trusted_proxies is not None:
+        if len(trusted_proxies) > 32 or any(ipaddress.ip_network(p).prefixlen == 0 for p in trusted_proxies):
+            raise ValueError('explicit non-wildcard trusted proxy networks required')
+    scope_permissions = validate_shared_scope_permissions(shared_scope_permissions if shared_scope_permissions is not None else {})
+    limiter = rate_limiter if rate_limiter is not None else RateLimiter(TOKEN_REQUESTS_PER_MINUTE)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            if hasattr(limiter,'close'):
+                limiter.close()
+            if connection_pool is not None:
+                connection_pool.close()
+
+    app = FastAPI(title="platform-identity", version="0.1.0", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+    @contextmanager
+    def connection():
+        if connection_pool is not None:
+            with connection_pool.connection() as conn:
+                yield conn
+        else:
+            conn = connect()
+            try:
+                yield conn
+            finally:
+                conn.close()
     jwk_set = {"keys": [signing_key.jwk]}
 
     def caller(authorization: str | None, channel: str | None) -> Principal:
@@ -116,16 +165,27 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
     @contextmanager
     def bound(workspace: uuid.UUID) -> Iterator[psycopg.Connection]:
         try:
-            conn = connect()
-        except psycopg.OperationalError as exc:
-            raise HTTPException(status_code=503, detail={"error": "unavailable"}) from exc
-        conn.row_factory = dict_row
+            with connection() as conn:
+                conn.row_factory = dict_row
+                try:
+                    conn.execute("SELECT set_config('app.workspace_id', %s, true)", (str(workspace),))
+                    yield conn
+                finally:
+                    conn.rollback()
+        except psycopg.Error:
+            raise HTTPException(status_code=503, detail={"error": "unavailable"}) from None
+
+    @app.get('/readyz', include_in_schema=False)
+    def readyz():
         try:
-            conn.execute("SELECT set_config('app.workspace_id', %s, true)", (str(workspace),))
-            yield conn
-        finally:
-            conn.rollback()
-            conn.close()
+            with connection() as conn:
+                conn.execute('SELECT 1')
+                conn.rollback()
+            if hasattr(limiter,'ready') and limiter.ready() is not True:
+                raise RateLimitUnavailable('admission unavailable')
+            return JSONResponse({'status':'ready'})
+        except Exception:
+            return JSONResponse({'status':'unavailable'},status_code=503)
 
     @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
@@ -177,7 +237,11 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
         workspace: Annotated[uuid.UUID, Form()],
         scope: Annotated[str | None, Form(max_length=2000)] = None,
     ) -> JSONResponse:
-        if not limiter.allow(client_address(request)):
+        try:
+            allowed = limiter.allow(client_address(request,trusted_proxies=trusted_proxies))
+        except RateLimitUnavailable:
+            raise _token_error(503, 'temporarily_unavailable', 'token admission is unavailable') from None
+        if not allowed:
             raise _token_error(429, "slow_down", "too many token requests")
         if grant_type != TOKEN_EXCHANGE:
             raise _token_error(400, "unsupported_grant_type", "only token exchange is supported")
@@ -186,7 +250,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
         if audience not in token_audiences:
             raise _token_error(400, "invalid_target", "audience is not available")
         scopes = scope.split() if scope else []
-        if len(scopes) > 32 or any(not PERMISSION.match(s) for s in scopes):
+        if len(scopes) > 32 or any(not PERMISSION.match(s) and s not in scope_permissions for s in scopes):
             raise _token_error(400, "invalid_scope", "scope must list permissions")
         try:
             external_subject = google.external_subject(subject_token)
@@ -199,6 +263,16 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
                 " WHERE i.external_subject = %s AND i.status = 'active' AND m.status = 'active'",
                 (workspace, external_subject),
             ).fetchone()
+            if row is not None:
+                for shared_scope in sorted(set(scopes) & scope_permissions.keys()):
+                    decision = conn.execute(
+                        "SELECT decision, reason, decision_id FROM platform.authorize("
+                        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (row['id'],workspace,scope_permissions[shared_scope],'shared-infra',shared_scope,
+                         workspace,None,None,None,'api',False),
+                    ).fetchone()
+                    if not decision or decision['decision'] != 'allow':
+                        raise _token_error(403,'invalid_scope','requested scope is not authorized')
         if row is None:
             # Same answer for an unknown person and a non-member, so membership does not leak.
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
@@ -247,8 +321,19 @@ def main() -> None:
     config = Config.from_env()
     platform_keys = (RemoteJwks(config.platform_jwks_url) if config.platform_jwks_url
                      else StaticKey(config.platform_public_key_pem or ""))
+    from platform_identity.rate_limit import PostgresRateLimiter, bounded_pool
+
+    primary_pool = bounded_pool(config.database_url,max_size=config.db_pool_max,
+                                timeout=config.db_timeout_seconds,statement_timeout_ms=config.db_statement_timeout_ms)
+    limiter = (PostgresRateLimiter(config.rate_limit_database_url,per_key=config.rate_limit_per_key,
+                                  global_limit=config.rate_limit_global,pool_max=config.rate_limit_pool_max,
+                                  timeout=config.db_timeout_seconds,statement_timeout_ms=config.db_statement_timeout_ms)
+               if config.rate_limit_mode == 'postgres' else None)
     app = create_app(
-        connect=lambda: psycopg.connect(config.database_url, connect_timeout=5),
+        connection_pool=primary_pool,
+        rate_limiter=limiter,
+        shared_scope_permissions=config.shared_scope_permissions,
+        trusted_proxies=config.trusted_proxies if config.rate_limit_mode == 'postgres' else None,
         platform_verifier=TokenVerifier(platform_keys, config.platform_issuer,
                                         max_lifetime=config.platform_max_lifetime),
         signing_key=SigningKey(config.signing_key_pem),
@@ -257,5 +342,6 @@ def main() -> None:
         token_audiences=config.token_audiences,
         decide_mode=config.decide_mode,
     )
-    # No proxy_headers: the rate limiter reads the last X-Forwarded-For hop itself (client_address).
-    uvicorn.run(app, host=config.host, port=config.port, proxy_headers=False)
+    # Preserve the socket peer; staged mode alone applies explicit proxy trust.
+    uvicorn.run(app, host=config.host, port=config.port, proxy_headers=False,
+                limit_concurrency=config.max_concurrency,timeout_keep_alive=5)

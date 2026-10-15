@@ -37,7 +37,21 @@ jobs:
         run: bash scripts/check.sh
 
   service:
-    name: Service tests
+    name: Service and shared PostgreSQL admission tests
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PLATFORM_TEST_DSN: dbname=postgres user=postgres host=127.0.0.1 port=5432
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -50,7 +64,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the service
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,postgres-test]"
 
-      - name: Run service tests
-        run: python -m unittest discover -s tests -v
+      - name: Run service and real PostgreSQL tests
+        run: python -m pytest -q
