@@ -153,6 +153,8 @@ These checks run inside the existing rollback-only membership transaction,
 so authorization audit side effects are not committed. Existing canonical
 scope requests keep their legacy behavior. The map cannot redefine canonical
 scope keys, contains at most 64 mappings / 16 KiB, rejects duplicates/wildcards,
+and limits each entire shared scope to 128 characters including the colon in
+both environment and programmatic app configuration,
 and never takes values from request bodies. Audiences remain explicitly allowed
 by `IDENTITY_TOKEN_AUDIENCES`.
 
@@ -199,10 +201,17 @@ gate through 2026-10-21 and existing rollback procedure. Issuer replacement,
 consumer trust, onboarding and cell cutover remain outside this change.
 
 
-Final local verification: `python -m pytest -q` passed 75 tests and 15 subtests,
+Final local verification: `python -m pytest -q` passed 79 tests and 15 subtests,
 with zero skips. The dependency-free `bash scripts/check.sh` passed its contract
 and schema checks (13 service tests visibly skipped by the system interpreter);
 the isolated interpreter separately ran all 49 unittest cases without skips.
 Wheel construction and isolated wheel import, including the packaged SQL
 migration, passed. One upstream Starlette/httpx deprecation warning remains.
 No production database, issuer, proxy, audience or RBAC configuration changed.
+
+
+Review regression: total scope lengths of 128 and 129 characters are tested
+through both environment configuration and programmatic `create_app` mappings.
+The 129-character cases failed before the guard; all four boundary cases pass
+afterward. The accepted 128-character scope also passes core principal and
+scope-dependency validation. Canonical permission validation remains unchanged.
