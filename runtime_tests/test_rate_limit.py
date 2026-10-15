@@ -373,3 +373,33 @@ def test_shared_scope_unknown_or_wrong_workspace_cannot_mint(app_keys):
         assert response.status_code == 400
         assert response.json()['error'] == 'invalid_grant'
         assert not db.authorize_args
+
+
+@pytest.mark.parametrize('length',[128,129])
+def test_shared_scope_total_length_boundary_in_environment_mapping(length):
+    import json
+    scope = 'a'*64 + ':' + 'b'*(length-65)
+    mapping = {scope:'tasks.task:write'}
+    environment = config_env(IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON=json.dumps(mapping))
+    if length == 128:
+        assert dict(Config.from_env(environment).shared_scope_permissions) == mapping
+    else:
+        with pytest.raises(ConfigError):
+            Config.from_env(environment)
+
+
+@pytest.mark.parametrize('length',[128,129])
+def test_shared_scope_total_length_boundary_in_programmatic_app_mapping(length,app_keys):
+    signing, verifier = app_keys
+    scope = 'a'*64 + ':' + 'b'*(length-65)
+    kwargs = dict(connect=FakeDatabase().connect,platform_verifier=verifier,signing_key=signing,
+                  issuer=ISSUER,google=None,token_audiences=frozenset(),
+                  shared_scope_permissions={scope:'tasks.task:write'})
+    if length == 128:
+        assert create_app(**kwargs)
+        from platform_backend_core import Principal,require_scope
+        assert Principal(uuid4(),uuid4(),frozenset({scope})).scopes == frozenset({scope})
+        assert callable(require_scope(scope))
+    else:
+        with pytest.raises(ValueError):
+            create_app(**kwargs)

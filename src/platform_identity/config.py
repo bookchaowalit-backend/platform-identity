@@ -41,7 +41,7 @@ def validate_shared_scope_permissions(mapping: Mapping[str,str]) -> dict[str,str
     if not isinstance(mapping,Mapping) or len(mapping) > 64:
         raise ValueError('shared scope map must be an object with at most 64 entries')
     for scope,permission in mapping.items():
-        if (not isinstance(scope,str) or not _SHARED.fullmatch(scope) or _CANONICAL.fullmatch(scope)
+        if (not isinstance(scope,str) or len(scope)>128 or not _SHARED.fullmatch(scope) or _CANONICAL.fullmatch(scope)
                 or not isinstance(permission,str) or len(permission)>200 or not _CANONICAL.fullmatch(permission)):
             raise ValueError('shared scopes must map to canonical RBAC permissions')
     return dict(mapping)
