@@ -56,7 +56,7 @@ class SentryTests(unittest.TestCase):
         ):
             _sentry.init_sentry()
         self.assertEqual(calls[0]["environment"], "production")
-        self.assertEqual(calls[0]["traces_sample_rate"], 0.0)
+        self.assertIsNone(calls[0]["traces_sample_rate"])
         self.assertIs(calls[0]["send_default_pii"], False)
         self.assertIs(calls[0]["include_local_variables"], False)
         self.assertEqual(calls[0]["max_request_body_size"], "never")
@@ -139,6 +139,18 @@ class SentryTests(unittest.TestCase):
         out = _sentry._scrub_event(event, {})
         self.assertEqual(out["logentry"], {"message": "Authorization: Bearer ***"})
         self.assertNotIn(token, str(out))
+
+    def test_scrub_event_drops_dynamic_sampling_context(self):
+        event = {
+            "contexts": {
+                "trace": {
+                    "trace_id": "t",
+                    "dynamic_sampling_context": {"user_id": "alice"},
+                }
+            }
+        }
+        out = _sentry._scrub_event(event, {})
+        self.assertEqual(out["contexts"]["trace"], {"trace_id": "t"})
 
 
 if __name__ == "__main__":
