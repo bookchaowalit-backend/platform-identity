@@ -7,7 +7,7 @@ license = "Apache-2.0"
 dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
-    "psycopg[binary]>=3.2,<4",
+    "psycopg[binary,pool]>=3.2,<4",
     "pyjwt[crypto]>=2.10,<3",
     "httpx>=0.27,<1",
     "python-multipart>=0.0.9,<1",
@@ -16,9 +16,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+postgres-test = ["platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@85b066fa5e02c960f013ed39a2f0473f2b2ef451"]
 
 [project.scripts]
 identity-api = "platform_identity.app:main"
+identity-rate-limit-migrate = "platform_identity.rate_limit:main"
 
 [build-system]
 requires = ["setuptools>=69"]
@@ -26,3 +28,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+platform_identity = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "runtime_tests"]
+pythonpath = ["src", "tests"]
