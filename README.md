@@ -75,6 +75,9 @@ python -m unittest discover -s tests      # contract checks + service tests
 identity-api                              # needs the IDENTITY_* variables
 ```
 
+Railway also sets `SENTRY_DSN` (error reporting; unset = off, see
+`src/platform_identity/_sentry.py`) and `SENTRY_ENVIRONMENT`.
+
 The parity test against the real decision point lives in `platform-empire`
 (`tests/test_identity_shadow.py`), which runs this service on its test database.
 
