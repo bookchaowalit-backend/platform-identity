@@ -115,7 +115,7 @@ class SentryTests(unittest.TestCase):
         self.assertEqual(
             out["exception"]["values"][0]["value"], "bad url postgres://u:***@h/db"
         )
-        self.assertEqual(out["request"], {"method": "POST", "url": "https://x/api"})
+        self.assertEqual(out["request"], {"method": "POST"})
         self.assertNotIn("data", out["breadcrumbs"]["values"][0])
         self.assertNotIn("abc", out["breadcrumbs"]["values"][0]["message"])
         self.assertNotIn("extra", out)
