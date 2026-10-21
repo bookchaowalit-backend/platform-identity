@@ -19,7 +19,10 @@ from urllib.parse import urlsplit
 import httpx
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_pem_public_key
+from cryptography.hazmat.primitives.serialization import (
+    load_pem_private_key,
+    load_pem_public_key,
+)
 
 JWKS_CACHE_SECONDS = 600
 UNKNOWN_KID_REFETCH_SECONDS = 60

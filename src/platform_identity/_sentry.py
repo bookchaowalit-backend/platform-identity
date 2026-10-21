@@ -84,7 +84,8 @@ def init_sentry() -> None:
         send_default_pii=False,
         include_local_variables=False,  # frame locals hold JWTs and database URLs
         max_request_body_size="never",
-        before_send=_scrub_event,
+        # sentry-sdk types events as a TypedDict; the scrubber treats them as plain dicts on purpose.
+        before_send=_scrub_event,  # type: ignore[arg-type]
         # Log records are neither events nor breadcrumbs: free-form log text can carry secrets
         # that no pattern can recognise. Unhandled exceptions (FastAPI, excepthook) and capture()
         # still report.

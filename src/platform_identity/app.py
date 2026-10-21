@@ -20,14 +20,14 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 import psycopg
 from fastapi import FastAPI, Form, Header, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 from pydantic import BaseModel, Field
 
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
@@ -114,9 +114,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
             raise HTTPException(status_code=401, detail={"error": "unauthenticated", "reason": str(exc)}) from exc
 
     @contextmanager
-    def bound(workspace: uuid.UUID) -> Iterator[psycopg.Connection]:
+    def bound(workspace: uuid.UUID) -> Iterator[psycopg.Connection[DictRow]]:
         try:
-            conn = connect()
+            conn = cast("psycopg.Connection[DictRow]", connect())
         except psycopg.OperationalError as exc:
             raise HTTPException(status_code=503, detail={"error": "unavailable"}) from exc
         conn.row_factory = dict_row
@@ -163,6 +163,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection], platform_verifier: 
             ).fetchone()
             if decide_mode == "record":
                 conn.commit()
+        if row is None:
+            # platform.authorize always returns one row; fail closed instead of crashing if it does not.
+            raise HTTPException(status_code=503, detail={"error": "unavailable"})
         response.headers["x-identity-decide-mode"] = decide_mode
         return Decision(decision=row["decision"], reason=row["reason"],
                         decision_id=row["decision_id"] if decide_mode == "record" else None)
