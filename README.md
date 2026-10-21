@@ -70,7 +70,7 @@ Configuration is listed in [`src/platform_identity/config.py`](src/platform_iden
 secrets (database URL, signing key) come only from the runtime environment.
 
 ```bash
-python -m pip install -e ".[dev]"
+uv sync --frozen --all-extras                # or: python -m pip install -e ".[dev]"
 python -m unittest discover -s tests      # contract checks + service tests
 identity-api                              # needs the IDENTITY_* variables
 ```

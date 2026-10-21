@@ -1,7 +1,10 @@
+# CI + security baseline (DevSecOps Phase 1). Public repository: GitHub-hosted runners.
+# CI never deploys. identity-api on Railway is deployed by hand: the Railway GitHub app is not installed on this org.
 name: Check
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -13,44 +16,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  contract:
-    name: Contract and tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  service:
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/ci-python.yml@87dc5e1c7e0416886a6371d5a101bb2ccba38edd # v1.1.1
+    with:
+      python-version: ${{ matrix.python-version }}
+      # Code is not ruff-formatted yet; lint rules are pinned in pyproject.toml.
+      format-check: false
+      # [tool.mypy] covers src/ only; tests and scripts are not typed yet.
+      typecheck-command: uv pip install "mypy==2.4.0" && mypy
+      # Same gates as before: offline contract check, schema pin, then every test (service tests use a fake database).
+      test-command: >-
+        python scripts/check.py
+        && python scripts/check_schema_pin.py
+        && python -m unittest discover -s tests -v
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Verify vendored schema matches pinned canonical
-        run: python3 scripts/check_schema_pin.py
-
-      - name: Run offline contract check and tests
-        run: bash scripts/check.sh
-
-  service:
-    name: Service tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install the service
-        run: python -m pip install -e ".[dev]"
-
-      - name: Run service tests
-        run: python -m unittest discover -s tests -v
+  security:
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/security.yml@87dc5e1c7e0416886a6371d5a101bb2ccba38edd # v1.1.1
