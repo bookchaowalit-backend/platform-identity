@@ -18,7 +18,12 @@ try:
     from cryptography.hazmat.primitives.asymmetric import rsa
     from fastapi.testclient import TestClient
 
-    from platform_identity.app import ACCESS_TOKEN_TTL_SECONDS, ID_TOKEN_TYPE, TOKEN_EXCHANGE, create_app
+    from platform_identity.app import (
+        ACCESS_TOKEN_TTL_SECONDS,
+        ID_TOKEN_TYPE,
+        TOKEN_EXCHANGE,
+        create_app,
+    )
     from platform_identity.auth import TokenVerifier
     from platform_identity.google import GoogleVerifier
     from platform_identity.keys import RemoteJwks, SigningKey, StaticKey, public_jwk
@@ -53,7 +58,8 @@ class FakeConnection:
             self.workspace = params[0]
         elif "platform.authorize" in query:
             self.db.authorize_args.append(params)
-            self._row = {"decision": self.db.decision, "reason": self.db.reason, "decision_id": uuid.uuid4()}
+            if self.db.authorize_returns_row:
+                self._row = {"decision": self.db.decision, "reason": self.db.reason, "decision_id": uuid.uuid4()}
         elif "platform.identities" in query:
             workspace, subject = params
             assert str(workspace) == self.workspace, "query must run in the bound workspace"
@@ -82,6 +88,7 @@ class FakeDatabase:
         self.commits = 0
         self.decision = "allow"
         self.reason = "allowed"
+        self.authorize_returns_row = True
         self.members: dict[tuple[str, str], uuid.UUID] = {}
 
     def connect(self) -> FakeConnection:
@@ -134,6 +141,13 @@ class ServiceTest(unittest.TestCase):
         args = self.db.authorize_args[0]
         self.assertEqual(args[:6], (self.actor, self.ws, "decisions.decision:read", "decision", "d-1", self.ws))
         self.assertEqual(args[6:], (None, None, None, "api", False))
+
+    def test_decide_fails_closed_when_authorize_returns_no_row(self) -> None:
+        self.db.authorize_returns_row = False
+        response = self.decide(self.platform_token())
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["detail"], {"error": "unavailable"})
+        self.assertNotIn("x-identity-decide-mode", response.headers)
 
     def test_record_mode_commits_and_returns_the_decision_id(self) -> None:
         self.client = self.make_client("record")
