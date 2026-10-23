@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-postgres-test = ["platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@85b066fa5e02c960f013ed39a2f0473f2b2ef451"]
+# platform-backend-core needs Python 3.12+; the admission tests that use it run in the 3.12 CI job only.
+postgres-test = ["platform-backend-core @ git+https://github.com/bookchaowalit-backend/platform-backend-core.git@85b066fa5e02c960f013ed39a2f0473f2b2ef451 ; python_version >= '3.12'"]
 
 [project.scripts]
 identity-api = "platform_identity.app:main"
