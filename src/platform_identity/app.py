@@ -317,7 +317,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
 def main() -> None:
     import uvicorn
 
-    from platform_identity.config import Config
+    from platform_identity.config import Config, ConfigError
     from platform_identity.google import GOOGLE_JWKS_URL, GoogleVerifier
     from platform_identity.keys import RemoteJwks, StaticKey
 
@@ -329,10 +329,13 @@ def main() -> None:
 
     primary_pool = bounded_pool(config.database_url,max_size=config.db_pool_max,
                                 timeout=config.db_timeout_seconds,statement_timeout_ms=config.db_statement_timeout_ms)
-    limiter = (PostgresRateLimiter(config.rate_limit_database_url,per_key=config.rate_limit_per_key,
-                                  global_limit=config.rate_limit_global,pool_max=config.rate_limit_pool_max,
-                                  timeout=config.db_timeout_seconds,statement_timeout_ms=config.db_statement_timeout_ms)
-               if config.rate_limit_mode == 'postgres' else None)
+    limiter = None
+    if config.rate_limit_mode == 'postgres':
+        if config.rate_limit_database_url is None:  # Config.from_env already rejects this; keep it explicit.
+            raise ConfigError('postgres mode requires IDENTITY_RATE_LIMIT_DATABASE_URL')
+        limiter = PostgresRateLimiter(config.rate_limit_database_url,per_key=config.rate_limit_per_key,
+                                      global_limit=config.rate_limit_global,pool_max=config.rate_limit_pool_max,
+                                      timeout=config.db_timeout_seconds,statement_timeout_ms=config.db_statement_timeout_ms)
     app = create_app(
         connection_pool=primary_pool,
         rate_limiter=limiter,

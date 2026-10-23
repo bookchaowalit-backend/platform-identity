@@ -96,7 +96,10 @@ class PostgresRateLimiter:
                     global_row = conn.execute('SELECT window_start,hits FROM identity_rate_limit.windows WHERE key_hash=%s FOR UPDATE',(_GLOBAL,)).fetchone()
                     if global_row is None:
                         raise RateLimitUnavailable('admission unavailable')
-                    window = conn.execute('SELECT floor(extract(epoch FROM clock_timestamp())/60)::bigint').fetchone()[0]
+                    clock = conn.execute('SELECT floor(extract(epoch FROM clock_timestamp())/60)::bigint').fetchone()
+                    if clock is None:
+                        raise RateLimitUnavailable('admission unavailable')
+                    window = clock[0]
                     conn.execute('DELETE FROM identity_rate_limit.windows WHERE key_hash IN ('
                                  'SELECT key_hash FROM identity_rate_limit.windows WHERE key_hash<>%s AND expires_at<clock_timestamp() '
                                  'ORDER BY expires_at,key_hash LIMIT 100)',(_GLOBAL,))
