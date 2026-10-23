@@ -1,19 +1,32 @@
 """Staged shared admission uses only explicitly supplied disposable PostgreSQL."""
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from multiprocessing import get_context
 from uuid import uuid4
 
-import pytest
 import psycopg
-from psycopg import sql
+import pytest
 from fastapi.testclient import TestClient
+from psycopg import sql
+from service.test_app import (
+    ISSUER,
+    PLATFORM_ISSUER,
+    FakeDatabase,
+    SigningKey,
+    StaticKey,
+    TokenVerifier,
+    key_pair,
+)
 from starlette.requests import Request
 
-from platform_identity.app import create_app, client_address, TOKEN_EXCHANGE, ID_TOKEN_TYPE
+from platform_identity.app import (
+    ID_TOKEN_TYPE,
+    TOKEN_EXCHANGE,
+    client_address,
+    create_app,
+)
 from platform_identity.config import Config, ConfigError
-from service.test_app import FakeDatabase, key_pair, SigningKey, StaticKey, TokenVerifier, ISSUER, PLATFORM_ISSUER
 
 
 def config_env(**overrides):
@@ -216,7 +229,7 @@ def test_database_clock_rollover_and_bounded_expired_cleanup(temporary):
 
 def test_privileged_limiter_role_is_rejected(temporary):
     migrated(temporary)
-    from platform_identity.rate_limit import PostgresRateLimiter,RateLimitUnavailable
+    from platform_identity.rate_limit import PostgresRateLimiter, RateLimitUnavailable
     limiter = PostgresRateLimiter(temporary.admin_dsn,timeout=.2)
     try:
         assert not limiter.ready()
@@ -243,7 +256,11 @@ def test_bounded_primary_pool_readiness_exhaustion_and_lifespan(temporary,app_ke
 
 def test_migration_checksum_and_exact_runtime_grants(temporary):
     migrated(temporary)
-    from platform_identity.rate_limit import PostgresRateLimiter,RateLimitUnavailable,apply_migration
+    from platform_identity.rate_limit import (
+        PostgresRateLimiter,
+        RateLimitUnavailable,
+        apply_migration,
+    )
     # Reapplication is idempotent and uses only the identity admission schema.
     migrated(temporary)
     with psycopg.connect(temporary.runtime_dsn) as conn:
@@ -267,6 +284,7 @@ def test_documented_cli_applies_migration_and_reports_failures_safely(temporary)
     import subprocess
     import sys
     from pathlib import Path
+
     from platform_identity.rate_limit import PostgresRateLimiter
     command = [sys.executable,'-m','platform_identity.rate_limit','--runtime-role',temporary.runtime_role]
     environment = {'IDENTITY_RATE_LIMIT_MIGRATION_DATABASE_URL':temporary.admin_dsn,
@@ -327,8 +345,9 @@ def shared_scope_app(app_keys, *, decision='allow', member=True):
 
 
 def test_shared_scope_requires_rbac_and_core_accepts_issued_token(app_keys):
-    from platform_backend_core import TokenVerifier as CoreVerifier, require_scope
-    from fastapi import FastAPI,Depends
+    from fastapi import Depends, FastAPI
+    from platform_backend_core import TokenVerifier as CoreVerifier
+    from platform_backend_core import require_scope
     app,db,data,workspace,actor = shared_scope_app(app_keys)
     with TestClient(app) as client:
         response = client.post('/v1/token',data=data)
@@ -397,7 +416,7 @@ def test_shared_scope_total_length_boundary_in_programmatic_app_mapping(length,a
                   shared_scope_permissions={scope:'tasks.task:write'})
     if length == 128:
         assert create_app(**kwargs)
-        from platform_backend_core import Principal,require_scope
+        from platform_backend_core import Principal, require_scope
         assert Principal(uuid4(),uuid4(),frozenset({scope})).scopes == frozenset({scope})
         assert callable(require_scope(scope))
     else:

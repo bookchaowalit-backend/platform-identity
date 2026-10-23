@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from importlib.resources import files
 import math
 import os
+from importlib.resources import files
 
 import psycopg
 from psycopg import sql

@@ -13,8 +13,8 @@
 
 from __future__ import annotations
 
-import logging
 import ipaddress
+import logging
 import re
 import threading
 import time
@@ -32,10 +32,10 @@ from psycopg.rows import DictRow, dict_row
 from pydantic import BaseModel, Field
 
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
+from platform_identity.config import validate_shared_scope_permissions
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
 from platform_identity.rate_limit import RateLimitUnavailable
-from platform_identity.config import validate_shared_scope_permissions
 
 log = logging.getLogger("platform_identity")
 
