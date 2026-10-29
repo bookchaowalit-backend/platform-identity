@@ -345,7 +345,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
             "scope": " ".join(sorted(scopes)), "client_id": client.client_id,
         }
-        log.info("service token issued client=%s audience=%s", client.client_id, audience)
+        log.info("service client admitted client=%s audience=%s", client.client_id, audience)
         return JSONResponse({
             "access_token": signing_key.sign(claims),
             "token_type": "Bearer",

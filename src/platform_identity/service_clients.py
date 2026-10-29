@@ -134,7 +134,8 @@ def verify_assertion(assertion: str, clients: dict[str, ServiceClient], audience
     The caller still has to consume the ``jti`` once it decides to issue a token.
     """
     try:
-        unverified = jwt.decode(assertion, options={"verify_signature": False})
+        # Read only ``iss`` to pick the registered key; the signature is verified with that key below.
+        unverified = jwt.decode(assertion, options={"verify_signature": False})  # nosemgrep: python.jwt.security.unverified-jwt-decode.unverified-jwt-decode
         claimed = unverified.get("iss")
         client = clients.get(claimed) if isinstance(claimed, str) else None
         if client is None:
