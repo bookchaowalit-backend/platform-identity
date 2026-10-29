@@ -72,7 +72,7 @@ def parse_service_clients(raw: str) -> dict[str, ServiceClient]:
         raise ValueError("service client registry is too large")
     try:
         data = json.loads(raw, object_pairs_hook=_unique_pairs)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         raise ValueError("service client registry is not JSON") from None
     if not isinstance(data, dict) or len(data) > MAX_CLIENTS:
         raise ValueError(f"service client registry must be an object of at most {MAX_CLIENTS} clients")
@@ -85,6 +85,9 @@ def parse_service_clients(raw: str) -> dict[str, ServiceClient]:
             key = load_pem_public_key(entry["public_key_pem"].replace("\\n", "\n").encode())
         except (AttributeError, TypeError, ValueError):
             raise ValueError("invalid service client entry") from None
+        nil = uuid.UUID(int=0)
+        if nil in (subject, workspace) or subject == workspace:
+            raise ValueError("service client subject and workspace must be distinct, non-nil UUIDs")
         if not isinstance(key, rsa.RSAPublicKey) or key.key_size < 2048:
             raise ValueError("service client keys must be RSA public keys of at least 2048 bits")
         clients[client_id] = ServiceClient(
@@ -100,26 +103,27 @@ class ReplayCache:
     """Assertion ``jti`` values per client, remembered until the assertion expires.
 
     Per process: enough for one identity-api replica (see docs/SERVICE-CLIENTS.md, "Limits").
-    When full of live entries it refuses rather than forgetting one.
+    Each client has its own bound, so one noisy client cannot lock out the others; a client
+    whose bound is full of live entries is refused rather than having one forgotten.
     """
 
-    def __init__(self, *, clock: Callable[[], float] = time.time, max_entries: int = 10_000) -> None:
+    def __init__(self, *, clock: Callable[[], float] = time.time, max_entries_per_client: int = 1_000) -> None:
         self._clock = clock
-        self._max_entries = max_entries
-        self._seen: dict[tuple[str, str], float] = {}
+        self._max_entries = max_entries_per_client
+        self._seen: dict[str, dict[str, float]] = {}
         self._lock = threading.Lock()
 
     def use(self, client_id: str, jti: str, *, expires_at: float) -> bool:
         with self._lock:
             now = self._clock()
-            key = (client_id, jti)
-            if key in self._seen and self._seen[key] >= now:
+            seen = self._seen.setdefault(client_id, {})
+            if seen.get(jti, -1.0) >= now:
                 return False
-            if len(self._seen) >= self._max_entries:
-                self._seen = {k: v for k, v in self._seen.items() if v >= now}
-                if len(self._seen) >= self._max_entries:
+            if len(seen) >= self._max_entries:
+                seen = self._seen[client_id] = {k: v for k, v in seen.items() if v >= now}
+                if len(seen) >= self._max_entries:
                     return False
-            self._seen[key] = expires_at
+            seen[jti] = expires_at
             return True
 
 
@@ -141,7 +145,8 @@ def verify_assertion(assertion: str, clients: dict[str, ServiceClient], audience
     except (jwt.PyJWTError, ValueError, TypeError):
         raise InvalidClient() from None
     jti, issued, expires = claims["jti"], claims["iat"], claims["exp"]
-    if (claims["sub"] != client.client_id or not isinstance(jti, str) or not 0 < len(jti) <= 200
+    # A single audience only (draft-ietf-oauth-rfc7523bis): a list naming another server is refused.
+    if (not isinstance(claims["aud"], str) or claims["sub"] != client.client_id or not isinstance(jti, str) or not 0 < len(jti) <= 200
             or not isinstance(issued, int) or not isinstance(expires, int)
             or not 0 < expires - issued <= MAX_ASSERTION_LIFETIME_SECONDS):
         raise InvalidClient()

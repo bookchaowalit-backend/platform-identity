@@ -167,6 +167,9 @@ class Config:
             raise ConfigError(f'IDENTITY_SERVICE_CLIENTS_JSON: {exc}') from None
         if any(not c.audiences <= audiences for c in service_clients.values()):
             raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON registers an audience missing from IDENTITY_TOKEN_AUDIENCES')
+        if any(s not in scope_mapping and not _CANONICAL.fullmatch(s)
+               for c in service_clients.values() for s in c.scopes):
+            raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON scopes must be mapped shared scopes or canonical permissions')
         return cls(
             service_clients=MappingProxyType(service_clients),
             shared_scope_permissions=MappingProxyType(scope_mapping),

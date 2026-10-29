@@ -108,7 +108,6 @@ class ServiceClientTest(unittest.TestCase):
 
     def test_the_issuer_itself_is_an_accepted_assertion_audience(self) -> None:
         self.decode(self.request(self.assertion(aud=ISSUER)))
-        self.decode(self.request(self.assertion(aud=[TOKEN_URL, "https://other.example"])))
 
     def test_matching_client_id_form_field_is_accepted(self) -> None:
         self.decode(self.request(client_id="ai-gateway"))
@@ -122,6 +121,7 @@ class ServiceClientTest(unittest.TestCase):
             "unknown client": self.assertion(iss="nobody", sub="nobody"),
             "sub differs from iss": self.assertion(sub="someone-else"),
             "wrong audience": self.assertion(aud="https://evil.example/v1/token"),
+            "audience list": self.assertion(aud=[TOKEN_URL, "https://other.example"]),
             "expired": self.assertion(iat=now - 120, exp=now - 60),
             "lifetime too long": self.assertion(ttl=301),
             "no jti": self.assertion(jti=None),
@@ -173,7 +173,9 @@ class ServiceClientTest(unittest.TestCase):
 
     def test_no_registered_clients_means_no_client_credentials(self) -> None:
         self.client = self.make_client(service_clients=None)
-        self.assertEqual(self.request().json()["error"], "invalid_client")
+        self.assertEqual(self.request().json()["error"], "unsupported_grant_type")
+        config = self.client.get("/.well-known/openid-configuration").json()
+        self.assertNotIn(CLIENT_CREDENTIALS, config["grant_types_supported"])
 
     def test_token_exchange_still_requires_its_own_parameters(self) -> None:
         response = self.client.post("/v1/token", data={"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -208,10 +210,11 @@ class ReplayCacheTest(unittest.TestCase):
         self.assertTrue(cache.use("ai-gateway", "j1", expires_at=1120))
 
     def test_refuses_when_full_of_live_entries(self) -> None:
-        cache = ReplayCache(clock=lambda: 0.0, max_entries=2)
+        cache = ReplayCache(clock=lambda: 0.0, max_entries_per_client=2)
         self.assertTrue(cache.use("c", "a", expires_at=100))
         self.assertTrue(cache.use("c", "b", expires_at=100))
         self.assertFalse(cache.use("c", "c", expires_at=100), "fail closed instead of forgetting live jtis")
+        self.assertTrue(cache.use("d", "a", expires_at=100), "one noisy client does not lock out the others")
 
 
 @unittest.skipIf(TestClient is None, "service dependencies are not installed")
@@ -253,6 +256,10 @@ class ServiceClientConfigTest(unittest.TestCase):
             "bad scope": json.dumps({"ai-gateway": self.entry(scopes=["everything"])}),
             "not a key": json.dumps({"ai-gateway": self.entry(public_key_pem="nope")}),
             "small key": json.dumps({"ai-gateway": self.entry(public_key_pem=small)}),
+            "nil subject": json.dumps({"ai-gateway": self.entry(subject=str(uuid.UUID(int=0)))}),
+            "nil workspace": json.dumps({"ai-gateway": self.entry(workspace=str(uuid.UUID(int=0)))}),
+            "subject is the workspace": json.dumps({"ai-gateway": self.entry(subject=subject, workspace=subject)}),
+            "deeply nested": "[" * 30000 + "]" * 30000,
             "shared subject": json.dumps({"a-one": self.entry(subject=subject), "a-two": self.entry(subject=subject)}),
             "duplicate client": '{"ai-gateway": %s, "ai-gateway": %s}' % (json.dumps(self.entry()),
                                                                         json.dumps(self.entry())),
@@ -266,13 +273,17 @@ class ServiceClientConfigTest(unittest.TestCase):
         signing_private = key_pair()[0]
         env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": signing_private,
                "IDENTITY_ISSUER": ISSUER, "IDENTITY_PLATFORM_ISSUER": PLATFORM_ISSUER,
-               "IDENTITY_PLATFORM_PUBLIC_KEY_PEM": self.public, "IDENTITY_TOKEN_AUDIENCES": "data-api"}
+               "IDENTITY_PLATFORM_PUBLIC_KEY_PEM": self.public, "IDENTITY_TOKEN_AUDIENCES": "data-api",
+               "IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON": json.dumps({"quotas:service": "data.quota:write"})}
         self.assertEqual(dict(Config.from_env(env).service_clients), {})
         env["IDENTITY_SERVICE_CLIENTS_JSON"] = json.dumps({"ai-gateway": self.entry()})
         self.assertEqual(set(Config.from_env(env).service_clients), {"ai-gateway"})
-        env["IDENTITY_SERVICE_CLIENTS_JSON"] = json.dumps({"ai-gateway": self.entry(audiences=["workflow-api"])})
-        with self.assertRaises(ConfigError):
-            Config.from_env(env)
+        env["IDENTITY_SERVICE_CLIENTS_JSON"] = json.dumps({"ai-gateway": self.entry(scopes=["data.quota:read"])})
+        self.assertEqual(set(Config.from_env(env).service_clients), {"ai-gateway"}, "canonical permissions are fine")
+        for bad in (self.entry(audiences=["workflow-api"]), self.entry(scopes=["quota:service"])):
+            env["IDENTITY_SERVICE_CLIENTS_JSON"] = json.dumps({"ai-gateway": bad})
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                Config.from_env(env)
         env["IDENTITY_SERVICE_CLIENTS_JSON"] = "{"
         with self.assertRaises(ConfigError) as caught:
             Config.from_env(env)

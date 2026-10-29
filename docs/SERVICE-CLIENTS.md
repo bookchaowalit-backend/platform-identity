@@ -41,18 +41,23 @@ which holds no secret:
 
 - `client_id`: 3–63 characters, `^[a-z][a-z0-9-]{2,62}$`; at most 32 clients.
 - `subject`: the UUID that becomes the token's `sub`. It is the service's
-  stable actor id (data records it as `service_actor`). Two clients never share
-  one.
+  stable actor id (data records it as `service_actor`). Generate a new random
+  UUID; never reuse a person's identity id, because services cannot tell a
+  service token from a person's token and would treat it as that person. Two
+  clients never share one, and it is never nil or equal to `workspace`.
 - `workspace`: the token's `ws`. A client acts in exactly one workspace. A
   second workspace needs a second client.
 - `audiences`: a subset of `IDENTITY_TOKEN_AUDIENCES`.
-- `scopes`: the most this client may ever receive. Each is a concrete shared
-  scope (`quotas:service`) or a canonical permission.
+- `scopes`: the most this client may ever receive. Each is a shared scope
+  listed in `IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON` (`quotas:service`) or a
+  canonical permission; anything else stops identity from starting.
 - `public_key_pem`: RSA, at least 2048 bits.
 
 The registration is the authorization. Issuing a service token does not call
-`platform.authorize` and does not touch the database, so it keeps working while
-the platform database is unavailable. Changing who may do what is a reviewed
+`platform.authorize` and does not touch the platform database, so it keeps
+working while that database is unavailable. In
+`IDENTITY_RATE_LIMIT_MODE=postgres` it still depends on the limiter's store and
+shares its global budget with token exchange. Changing who may do what is a reviewed
 configuration change and a redeploy, which suits the handful of internal
 callers this covers.
 
@@ -71,13 +76,16 @@ client_id=ai-gateway        (optional; must match the assertion)
 The assertion must have:
 
 - `iss` = `sub` = the client id;
-- `aud` = the token endpoint `<issuer>/v1/token`, or the issuer itself;
-- `iat` and `exp`, with `exp - iat` ≤ 300 s and `exp` in the future;
+- `aud` = one string, the token endpoint `<issuer>/v1/token` or the issuer
+  itself (a list is refused);
+- `iat` and `exp`, with `exp - iat` ≤ 300 s. Clocks may differ by up to 30 s,
+  so `exp` may be at most 30 s in the past and `iat` at most 30 s ahead;
 - a `jti` that is used once.
 
 Identity remembers every `jti` until its assertion expires, so a replay is
 refused. The memory is per process, which is enough while identity-api runs
-one replica; see "Limits".
+one replica, and bounded per client, so one client that floods it is refused
+without locking out the others; see "Limits".
 
 ### Response
 
@@ -101,8 +109,10 @@ services.
 | A scope outside the client's registration | 400 | `invalid_scope` |
 | Wrong or missing `client_assertion_type` | 400 | `invalid_request` |
 
-Every `invalid_client` answer is the same, so the response does not say which
-check failed. The rate limiter admits client-credentials requests exactly as it
+Every `invalid_client` answer has the same body, so it does not say which check
+failed. An unknown client id is answered without a signature check, so response
+time can tell whether a client id exists; client ids are not secret.
+`client_credentials` without any registered client is `unsupported_grant_type`. The rate limiter admits client-credentials requests exactly as it
 admits token exchange.
 
 ## Alternatives rejected

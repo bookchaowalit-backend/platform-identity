@@ -268,7 +268,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             raise _token_error(503, 'temporarily_unavailable', 'token admission is unavailable') from None
         if not allowed:
             raise _token_error(429, "slow_down", "too many token requests")
-        if grant_type == CLIENT_CREDENTIALS:
+        if grant_type == CLIENT_CREDENTIALS and clients:
             return service_token(audience, scope, client_assertion_type, client_assertion, client_id)
         if grant_type != TOKEN_EXCHANGE:
             raise _token_error(400, "unsupported_grant_type", "only token exchange and client credentials are supported")
