@@ -47,16 +47,20 @@ canonical permission (see [SHARED-RATE-LIMIT.md](SHARED-RATE-LIMIT.md),
    - `ai-gateway`: audience `data-api`, scope `quotas:service`, workspace
      `PLATFORM_SYSTEM_WORKSPACE_ID` (Infisical `/platform-data`);
    - one client per workflow worker: audience `workflow-api`, scope
-     `jobs:work`, workspace = the workspace whose jobs it runs.
+     `jobs:work`, workspace = the workspace whose jobs it runs. The worker
+     service sets `WORKFLOW_WORKER_CLIENT_ID` and
+     `WORKFLOW_WORKER_PRIVATE_KEY_PEM` (platform-workflow `docs/RUNTIME.md`,
+     merged 2026-10-29 in platform-workflow#4) and renews its token itself.
 
    Then request a token with `grant_type=client_credentials` and call
    `/v1/service/admissions` and `/v1/worker/claim` once.
 
 ## Not covered yet
 
-- **Callers that fetch tokens.** The AI gateway and the workflow worker still
-  have to sign assertions and refresh their tokens themselves. Today the
-  workflow CLI worker reads one static `WORKFLOW_WORKER_AUTHORIZATION` value,
-  which expires after 600 s.
+- **The AI gateway caller.** Nothing calls platform-data
+  `/v1/service/admissions` yet: platform-ai is a scaffold without code. When it
+  is built, it uses platform-backend-core's `ServiceTokenSource`
+  (`dc1fa7d`, platform-backend-core#10) with audience `data-api` and scope
+  `quotas:service`, the same way the workflow worker does.
 - **Cells.** The existing cells still trust `empire-platform`; their cutover is
   the design's step 6 and is unchanged by this note.
