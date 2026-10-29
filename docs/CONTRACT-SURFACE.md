@@ -29,6 +29,10 @@ preserve. `planned` interfaces do not exist yet. The `source` column is a path i
 
 ## Behaviour notes
 
+- `POST /v1/token` also takes `grant_type=client_credentials` with a
+  `private_key_jwt` client assertion for registered service clients; see
+  [SERVICE-CLIENTS.md](SERVICE-CLIENTS.md). Those tokens add `client_id` and
+  always carry `scope`.
 - Access tokens are RS256 JWTs with `iss`, `aud`, `sub`, `ws`, `iat`, `exp`
   and `jti` (plus `del` for delegated tokens). The issuer stays
   `empire-platform` during the transition.

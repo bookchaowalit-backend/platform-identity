@@ -10,6 +10,8 @@
 ``IDENTITY_PLATFORM_MAX_LIFETIME``    delegated token lifetime limit (seconds)
 ``IDENTITY_GOOGLE_CLIENT_IDS`` comma-separated Google OAuth client IDs
 ``IDENTITY_TOKEN_AUDIENCES``   audiences ``/v1/token`` may issue for
+``IDENTITY_SERVICE_CLIENTS_JSON``  registered service clients (public keys only;
+                               docs/SERVICE-CLIENTS.md)
 ``IDENTITY_DECIDE_MODE``       ``shadow`` (default: decide, record nothing) or
                                ``record`` (record like the platform does)
 =============================  =================================================
@@ -28,6 +30,7 @@ from types import MappingProxyType
 
 from platform_identity.auth import HARD_MAX_LIFETIME_SECONDS, MAX_LIFETIME_SECONDS
 from platform_identity.keys import require_https
+from platform_identity.service_clients import ServiceClient, parse_service_clients
 
 DECIDE_MODES = ("shadow", "record")
 AUDIENCE_PATTERN = "^[a-z][a-z0-9-]{1,62}$"
@@ -86,6 +89,7 @@ class Config:
     db_statement_timeout_ms: int = 5000
     max_concurrency: int = 64
     shared_scope_permissions: Mapping[str,str] = field(default_factory=lambda:MappingProxyType({}))
+    service_clients: Mapping[str, ServiceClient] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
@@ -157,7 +161,14 @@ class Config:
             scope_mapping = validate_shared_scope_permissions(json.loads(raw_mapping,object_pairs_hook=_unique_pairs))
         except (TypeError,ValueError):
             raise ConfigError('IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON must map concrete shared scopes to canonical RBAC actions') from None
+        try:
+            service_clients = parse_service_clients(env.get('IDENTITY_SERVICE_CLIENTS_JSON', ''))
+        except ValueError as exc:
+            raise ConfigError(f'IDENTITY_SERVICE_CLIENTS_JSON: {exc}') from None
+        if any(not c.audiences <= audiences for c in service_clients.values()):
+            raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON registers an audience missing from IDENTITY_TOKEN_AUDIENCES')
         return cls(
+            service_clients=MappingProxyType(service_clients),
             shared_scope_permissions=MappingProxyType(scope_mapping),
             rate_limit_mode=rate_mode,
             rate_limit_database_url=limiter_dsn,
