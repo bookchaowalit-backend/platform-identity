@@ -8,7 +8,9 @@
   a transaction that is rolled back, so nothing is recorded twice; the
   platform mirrors its own answered requests here and logs any difference.
 - ``POST /v1/token``: RFC 8693 token exchange of a Google id_token for an
-  access token bound to one audience and one workspace.
+  access token bound to one audience and one workspace, or the
+  ``client_credentials`` grant for a registered service client
+  (``private_key_jwt``, docs/SERVICE-CLIENTS.md).
 """
 
 from __future__ import annotations
@@ -36,6 +38,15 @@ from platform_identity.config import validate_shared_scope_permissions
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
 from platform_identity.rate_limit import RateLimitUnavailable
+from platform_identity.service_clients import (
+    ASSERTION_LEEWAY_SECONDS,
+    ASSERTION_TYPE,
+    CLIENT_CREDENTIALS,
+    InvalidClient,
+    ReplayCache,
+    ServiceClient,
+    verify_assertion,
+)
 
 log = logging.getLogger("platform_identity")
 
@@ -120,7 +131,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                issuer: str, google: Any, token_audiences: frozenset[str], decide_mode: str = "shadow",
                clock: Callable[[], float] = time.time, rate_limiter: Any = None,
                trusted_proxies: tuple[str, ...] | None = None, connection_pool: Any = None,
-               shared_scope_permissions: Mapping[str,str] | None = None) -> FastAPI:
+               shared_scope_permissions: Mapping[str,str] | None = None,
+               service_clients: Mapping[str, ServiceClient] | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -130,6 +142,11 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             raise ValueError('explicit non-wildcard trusted proxy networks required')
     scope_permissions = validate_shared_scope_permissions(shared_scope_permissions if shared_scope_permissions is not None else {})
     limiter = rate_limiter if rate_limiter is not None else RateLimiter(TOKEN_REQUESTS_PER_MINUTE)
+    clients = dict(service_clients or {})
+    if any(not c.audiences <= token_audiences for c in clients.values()):
+        raise ValueError('service clients may only be registered for available token audiences')
+    replays = ReplayCache(clock=clock)
+    assertion_audiences = [f"{issuer}/v1/token", issuer]
 
     @asynccontextmanager
     async def lifespan(app):
@@ -202,8 +219,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "issuer": issuer,
             "jwks_uri": f"{issuer}/.well-known/jwks.json",
             "token_endpoint": f"{issuer}/v1/token",
-            "grant_types_supported": [TOKEN_EXCHANGE],
-            "token_endpoint_auth_methods_supported": ["none"],
+            "grant_types_supported": [TOKEN_EXCHANGE] + ([CLIENT_CREDENTIALS] if clients else []),
+            "token_endpoint_auth_methods_supported": ["none"] + (["private_key_jwt"] if clients else []),
+            **({"token_endpoint_auth_signing_alg_values_supported": ["RS256"]} if clients else {}),
             "id_token_signing_alg_values_supported": ["RS256"],
         }, headers={"Cache-Control": "public, max-age=300"})
 
@@ -235,11 +253,14 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     def token(
         request: Request,
         grant_type: Annotated[str, Form()],
-        subject_token: Annotated[str, Form(max_length=8192)],
-        subject_token_type: Annotated[str, Form()],
         audience: Annotated[str, Form(max_length=64)],
-        workspace: Annotated[uuid.UUID, Form()],
+        subject_token: Annotated[str | None, Form(max_length=8192)] = None,
+        subject_token_type: Annotated[str | None, Form()] = None,
+        workspace: Annotated[uuid.UUID | None, Form()] = None,
         scope: Annotated[str | None, Form(max_length=2000)] = None,
+        client_assertion_type: Annotated[str | None, Form(max_length=200)] = None,
+        client_assertion: Annotated[str | None, Form(max_length=8192)] = None,
+        client_id: Annotated[str | None, Form(max_length=64)] = None,
     ) -> JSONResponse:
         try:
             allowed = limiter.allow(client_address(request,trusted_proxies=trusted_proxies))
@@ -247,8 +268,12 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             raise _token_error(503, 'temporarily_unavailable', 'token admission is unavailable') from None
         if not allowed:
             raise _token_error(429, "slow_down", "too many token requests")
+        if grant_type == CLIENT_CREDENTIALS and clients:
+            return service_token(audience, scope, client_assertion_type, client_assertion, client_id)
         if grant_type != TOKEN_EXCHANGE:
-            raise _token_error(400, "unsupported_grant_type", "only token exchange is supported")
+            raise _token_error(400, "unsupported_grant_type", "only token exchange and client credentials are supported")
+        if subject_token is None or workspace is None:
+            raise _token_error(400, "invalid_request", "missing or malformed parameter")
         if subject_token_type != ID_TOKEN_TYPE:
             raise _token_error(400, "invalid_request", "subject_token_type must be an id_token")
         if audience not in token_audiences:
@@ -291,6 +316,38 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         return JSONResponse({
             "access_token": signing_key.sign(claims),
             "issued_token_type": ACCESS_TOKEN_TYPE,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+        }, headers={"Cache-Control": "no-store"})
+
+    def service_token(audience: str, scope: str | None, assertion_type: str | None, assertion: str | None,
+                      client_id: str | None) -> JSONResponse:
+        if assertion_type != ASSERTION_TYPE or not assertion:
+            raise _token_error(400, "invalid_request", "a jwt-bearer client assertion is required")
+        try:
+            client, assertion_claims = verify_assertion(assertion, clients, assertion_audiences)
+            if client_id is not None and client_id != client.client_id:
+                raise InvalidClient()
+        except InvalidClient:
+            raise _token_error(401, "invalid_client", "client authentication failed") from None
+        if audience not in client.audiences:
+            raise _token_error(400, "invalid_target", "audience is not available")
+        scopes = set(scope.split()) if scope else set(client.scopes)
+        if not scopes or len(scopes) > 32 or not scopes <= client.scopes:
+            raise _token_error(400, "invalid_scope", "scope is not registered for this client")
+        # Consume the jti last, so a request refused above does not burn a valid assertion.
+        if not replays.use(client.client_id, assertion_claims["jti"],
+                           expires_at=assertion_claims["exp"] + ASSERTION_LEEWAY_SECONDS):
+            raise _token_error(401, "invalid_client", "client authentication failed")
+        now = int(clock())
+        claims: dict[str, Any] = {
+            "iss": issuer, "aud": audience, "sub": str(client.subject), "ws": str(client.workspace),
+            "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
+            "scope": " ".join(sorted(scopes)), "client_id": client.client_id,
+        }
+        log.info("service client admitted client=%s audience=%s", client.client_id, audience)
+        return JSONResponse({
+            "access_token": signing_key.sign(claims),
             "token_type": "Bearer",
             "expires_in": ACCESS_TOKEN_TTL_SECONDS,
         }, headers={"Cache-Control": "no-store"})
@@ -340,6 +397,7 @@ def main() -> None:
         connection_pool=primary_pool,
         rate_limiter=limiter,
         shared_scope_permissions=config.shared_scope_permissions,
+        service_clients=config.service_clients,
         trusted_proxies=config.trusted_proxies if config.rate_limit_mode == 'postgres' else None,
         platform_verifier=TokenVerifier(platform_keys, config.platform_issuer,
                                         max_lifetime=config.platform_max_lifetime),

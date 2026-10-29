@@ -40,11 +40,23 @@ canonical permission (see [SHARED-RATE-LIMIT.md](SHARED-RATE-LIMIT.md),
    `audience=<service>-api`, `scope=<shared scopes>`) and call each service once
    (send a Telegram message, upload a file, set a flag, place an order...).
 
+6. Service clients ([SERVICE-CLIENTS.md](SERVICE-CLIENTS.md), merged
+   2026-10-29). For each machine caller, the calling service generates its own
+   RSA key pair and keeps the private key in its own secret store. Register the
+   public key on identity-api in `IDENTITY_SERVICE_CLIENTS_JSON`, then redeploy:
+   - `ai-gateway`: audience `data-api`, scope `quotas:service`, workspace
+     `PLATFORM_SYSTEM_WORKSPACE_ID` (Infisical `/platform-data`);
+   - one client per workflow worker: audience `workflow-api`, scope
+     `jobs:work`, workspace = the workspace whose jobs it runs.
+
+   Then request a token with `grant_type=client_credentials` and call
+   `/v1/service/admissions` and `/v1/worker/claim` once.
+
 ## Not covered yet
 
-- **Service-to-service tokens.** platform-data's `quotas:service` (used by the AI
-  gateway with `ws` = `PLATFORM_SYSTEM_WORKSPACE_ID`) and the workflow worker's
-  `jobs:work` token have no machine path here: `/v1/token` exchanges a person's
-  Google id_token only. A service credential flow needs its own decision.
+- **Callers that fetch tokens.** The AI gateway and the workflow worker still
+  have to sign assertions and refresh their tokens themselves. Today the
+  workflow CLI worker reads one static `WORKFLOW_WORKER_AUTHORIZATION` value,
+  which expires after 600 s.
 - **Cells.** The existing cells still trust `empire-platform`; their cutover is
   the design's step 6 and is unchanged by this note.
