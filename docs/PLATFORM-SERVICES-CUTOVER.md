@@ -82,6 +82,28 @@ Still open from the activation list above: steps 1–3 and 5 (platform-empire PR
 deploy, owner grants, Google OAuth client id, a person token per service) and the
 `ai-gateway` / workflow worker clients.
 
+## Activated 2026-11-03: PR #17 merged, owner grants, 35 scopes
+
+Owner go 2026-11-03 ("Yes, activate").
+
+- platform-empire PR #17 merged locally (`0f001d1`): default audiences now include the
+  eight Book Platform services and `security-api`; `PLATFORM_SHARED_SCOPES` holds 35
+  scopes (adds `references:read` → `security.secret-reference:read` and
+  `references:write` → `security.secret-reference:write`). CI green; tasks-api,
+  tasks-publisher, recurring-gen and token-rotate deployments approved and SUCCESS.
+- Owner grants (step 2) for communication, media, data, workflow, commerce, logistics,
+  developer and security: 35 permissions added; a second dry run adds 0.
+- `IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON` regenerated from that map (35 scopes) with
+  `--skip-deploys`, checked with `Config.from_env`, then identity-api redeployed from a
+  clean `git archive main` (`6ad4bb9`). Signing key and JWKS `kid` unchanged; `/health`,
+  `/readyz`, JWKS and discovery 200. A posture-monitor token (`audit:read`, audience
+  `security-api`) reads `/v1/audit` with 200; `references:read` for that client is
+  refused with `invalid_scope`, as registered.
+
+Still open: step 3 (owner sets `IDENTITY_GOOGLE_CLIENT_IDS`; until then `/v1/token`
+rejects every Google token, so step 5, a person token per service, waits on it) and
+the `ai-gateway` / workflow worker service clients.
+
 ## Not covered yet
 
 - **The AI gateway caller.** Nothing calls platform-data
