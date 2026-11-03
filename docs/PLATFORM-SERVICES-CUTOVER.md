@@ -55,6 +55,33 @@ canonical permission (see [SHARED-RATE-LIMIT.md](SHARED-RATE-LIMIT.md),
    Then request a token with `grant_type=client_credentials` and call
    `/v1/service/admissions` and `/v1/worker/claim` once.
 
+## Deployed 2026-11-03: service clients live, first caller security-api
+
+Owner go 2026-11-03 ("Deploy identity-api"). identity-api runs `main` at `a9bbfae`
+(clean `git archive main`, `railway up --path-as-root`, deployment `7a4e4280`), so
+`/v1/token` accepts `client_credentials` with `private_key_jwt` and the shared scope bridge
+is live. Variables changed beforehand with `--skip-deploys` and checked with
+`Config.from_env`:
+
+- `IDENTITY_TOKEN_AUDIENCES` adds `security-api` (nine audiences);
+- `IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON` adds `audit:read` → `security.audit:read` and
+  `audit:write` → `security.audit:write` (33 scopes; same map as platform-empire
+  `PLATFORM_SHARED_SCOPES` on the PR #17 branch, commit `5e87e0a`);
+- `IDENTITY_SERVICE_CLIENTS_JSON` registers `posture-monitor` (audience `security-api`,
+  scopes `audit:read`, `audit:write`, system workspace `PLATFORM_SYSTEM_WORKSPACE_ID`, own
+  random subject). Its private key lives only in Infisical `/posture-monitor` and the
+  platform-posture-monitor Actions secrets.
+
+The signing key is unchanged, so the JWKS `kid` and every token the eight services already
+trust stay valid. Checked after the deploy: `/health` 200; discovery lists
+`client_credentials` and `private_key_jwt`; a posture-monitor token (600 s) appended and read
+`security-api` audit events; communication, media, data, workflow, developer and security
+`/readyz` 200; no errors in the identity log.
+
+Still open from the activation list above: steps 1–3 and 5 (platform-empire PR #17 merge and
+deploy, owner grants, Google OAuth client id, a person token per service) and the
+`ai-gateway` / workflow worker clients.
+
 ## Not covered yet
 
 - **The AI gateway caller.** Nothing calls platform-data
