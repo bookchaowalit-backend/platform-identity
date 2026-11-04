@@ -28,6 +28,8 @@ Sources: `src/platform_identity/app.py`, `src/platform_identity/google.py` (`GOO
 
 หมายเหตุ: `payment-api` มี audience ใน identity ตาม ops record แต่ readyz ยัง 503 จึงไม่ได้วาดเป็นผู้ใช้ JWKS ที่ยืนยันแล้ว
 
+หมายเหตุ (2026-11-04): edge gateway `gateway.bookchaowalit.com` ไม่มี route ไป identity (platform-api-gateway `routes.json` @ `4a31ff5` ไม่มี key ของ identity; ops record: api-gateway-edge (2026-11-03) ระบุว่า generator ข้าม identity) จึงไม่วาด gateway ในภาพนี้: ทุก caller เรียก identity โดยตรง
+
 ## Open questions
 
 - Neon project ที่ `IDENTITY_DATABASE_URL` ชี้: design บอกว่าเป็น DB ของ platform-empire (schema `platform`); ชื่อ Neon project `empire-platform` มาจาก cutover doc ("Neon `empire-platform` quota") ยืนยันจาก Railway variables ไม่ได้ใน repo

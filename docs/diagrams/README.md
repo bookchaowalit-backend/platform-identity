@@ -6,6 +6,8 @@ platform-identity คือ identity service ของ Book Platform (`identity-
 
 ทุกไฟล์มี `Sources:` ใต้ภาพ และ "Open questions" สำหรับสิ่งที่ยืนยันจากโค้ดไม่ได้; ข้อเท็จจริง hosting ที่ไม่อยู่ใน repo อ้าง `ops record: book-platforms-status (2026-11-03)`
 
+สรุปสถาปัตยกรรมระดับระบบ (style, quality attributes, integrations, fitness functions): [`DOCPACK/02-architecture.md`](../../DOCPACK/02-architecture.md)
+
 | # | Item | Status | File | Sources read |
 |---|---|---|---|---|
 | 01 | Business process As-Is / To-Be | done | [01-business-process.md](01-business-process.md) | `app.py`, `google.py`, `service_clients.py`, `PRODUCT.md`, `docs/DESIGN-2026-10-13.md`, `docs/PLATFORM-SERVICES-CUTOVER.md` |
