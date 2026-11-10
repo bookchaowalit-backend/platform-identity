@@ -15,9 +15,9 @@ platform-identity คือ identity service ของ Book Platform (`identity-
 | 03 | User flows (API call flows) | done | [03-user-flows.md](03-user-flows.md) | `app.py`, `docs/SERVICE-CLIENTS.md`, `docs/PLATFORM-SERVICES-CUTOVER.md`, `README.md` |
 | 04 | Traceability (RTM) | done | [04-traceability.md](04-traceability.md) | `PRODUCT.md`, `contract.json`, `src/`, `tests/`, `runtime_tests/`, `check.yml` |
 | 05 | C4 Context | done | [05-c4-context.md](05-c4-context.md) | `src/`, `README.md`, `PRODUCT.md`, design doc, cutover doc, ops record |
-| 06 | C4 Container | done | [06-c4-container.md](06-c4-container.md) | `Dockerfile`, `railway.toml`, `pyproject.toml`, `app.py`, `keys.py`, `rate_limit.py` |
+| 06 | C4 Container | done | [06-c4-container.md](06-c4-container.md) | `Dockerfile`, `.railway/railway.ts`, `pyproject.toml`, `app.py`, `keys.py`, `rate_limit.py` |
 | 07 | C4 Component | done | [07-c4-component.md](07-c4-component.md) | all modules in `src/platform_identity/` |
-| 08 | ADRs | done (6) | [08-adr/](08-adr/) | design doc §10, `SERVICE-CLIENTS.md`, `railway.toml`, `check.yml`, `src/`, git log |
+| 08 | ADRs | done (6) | [08-adr/](08-adr/) | design doc §10, `SERVICE-CLIENTS.md`, `.railway/railway.ts`, `check.yml`, `src/`, git log |
 | 09 | ERD | done (partial: `platform.*` columns live in platform-empire) | [09-erd.md](09-erd.md) | SQL in `app.py`, `migrations/0001_token_rate_limit.sql`, `rate_limit.py`, `contract.json` |
 | 10 | Sequences | done | [10-sequences.md](10-sequences.md) | `app.py`, `auth.py`, `google.py`, `service_clients.py`, `rate_limit.py` |
 | 11 | State machines | done | [11-state-machines.md](11-state-machines.md) | `service_clients.py`, `app.py`, `rate_limit.py`, design §5 |
@@ -25,12 +25,12 @@ platform-identity คือ identity service ของ Book Platform (`identity-
 | 13 | Threat model | done | [13-threat-model.md](13-threat-model.md) | `src/`, `tests/service/`, `SERVICE-CLIENTS.md`, `SHARED-RATE-LIMIT.md`, design §9 |
 | 14 | Backup & DR | done | [14-backup-dr.md](14-backup-dr.md) | `rate_limit.py`, `SHARED-RATE-LIMIT.md`, cutover doc, central ADR-0002 |
 | 15 | CI/CD pipeline | done | [15-cicd-pipeline.md](15-cicd-pipeline.md) | `.github/workflows/check.yml`, platform-ci-workflows `ci-python.yml` / `security.yml` @ `87dc5e1c` |
-| 16 | Deployment | done | [16-deployment.md](16-deployment.md) | `Dockerfile`, `railway.toml`, `config.py`, cutover doc, `PRODUCT.md` |
+| 16 | Deployment | done | [16-deployment.md](16-deployment.md) | `Dockerfile`, `.railway/railway.ts`, `config.py`, cutover doc, `PRODUCT.md` |
 | 17 | Test coverage matrix | done | [17-test-coverage-matrix.md](17-test-coverage-matrix.md) | `tests/`, `runtime_tests/`, `check.yml` |
 | 18 | Git & release workflow | done | [18-git-release-workflow.md](18-git-release-workflow.md) | `git log --first-parent`, `gh pr list` |
 | 19 | Service dependency map | done | [19-service-dependency-map.md](19-service-dependency-map.md) | `src/`, cutover doc, `SERVICE-CLIENTS.md`, ops record |
-| 20 | Observability | done | [20-observability.md](20-observability.md) | `_sentry.py`, `app.py`, `railway.toml`, `PRODUCT.md` |
-| 21 | Incident response | reused + extended ([`docs/PLATFORM-SERVICES-CUTOVER.md`](../PLATFORM-SERVICES-CUTOVER.md)) | [21-incident-response.md](21-incident-response.md) | cutover doc, design §7, `app.py`, `railway.toml` |
+| 20 | Observability | done | [20-observability.md](20-observability.md) | `_sentry.py`, `app.py`, `.railway/railway.ts`, `PRODUCT.md` |
+| 21 | Incident response | reused + extended ([`docs/PLATFORM-SERVICES-CUTOVER.md`](../PLATFORM-SERVICES-CUTOVER.md)) | [21-incident-response.md](21-incident-response.md) | cutover doc, design §7, `app.py`, `.railway/railway.ts` |
 | 22 | DORA | done (deploy-based values partial: CLI deploys not in git/gh) | [22-dora.md](22-dora.md) | `git log`, `gh run list` (35 runs), `gh pr list`, cutover doc |
 
 ## ADR list

@@ -42,7 +42,7 @@ flowchart LR
   CONS -->|"GET JWKS"| PROXY
 ```
 
-Sources: `src/platform_identity/*.py`, `railway.toml`, `docs/PLATFORM-SERVICES-CUTOVER.md` (issuer URL), `docs/DESIGN-2026-10-13.md` §9, `docs/SHARED-RATE-LIMIT.md`
+Sources: `src/platform_identity/*.py`, `.railway/railway.ts`, `docs/PLATFORM-SERVICES-CUTOVER.md` (issuer URL), `docs/DESIGN-2026-10-13.md` §9, `docs/SHARED-RATE-LIMIT.md`
 
 ## STRIDE per element
 

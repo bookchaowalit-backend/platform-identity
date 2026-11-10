@@ -94,7 +94,7 @@ Edge gateway (`gateway.bookchaowalit.com`) **ไม่** มี route ไป ide
 | Platform PostgreSQL schema `platform` | identities, workspaces, memberships, roles, policies, delegations, `platform.authorize()` | platform-empire (migration 0008 สร้าง role `identity_api`) | [ADR-0004](../docs/diagrams/08-adr/ADR-0004-shared-platform-db-rls-role.md), `docs/DESIGN-2026-10-13.md` §4 |
 | schema `identity_rate_limit` (optional, โหมด postgres) | windows, schema_migrations | repo นี้ | `migrations/0001_token_rate_limit.sql`, `docs/SHARED-RATE-LIMIT.md` |
 | In-process | rate limiter (โหมด local), `ReplayCache`, JWKS cache | — | `app.py`, `service_clients.py`, `keys.py` |
-| Railway variables | signing key, service client registry (public keys เท่านั้น) | owner | `railway.toml` comment, `config.py` |
+| Railway variables | signing key, service client registry (public keys เท่านั้น) | owner | `.railway/railway.ts` comment, `config.py` |
 
 ERD: [09-erd.md](../docs/diagrams/09-erd.md). ไม่เก็บรหัสผ่าน (`PRODUCT.md`)
 
@@ -129,7 +129,7 @@ flowchart TB
 ```
 
 - Deploy ด้วย CLI เท่านั้น (Railway GitHub app ไม่ได้ติดตั้งใน org: comment ใน `check.yml`) ([ADR-0006](../docs/diagrams/08-adr/ADR-0006-railway-cli-deploy-singapore.md))
-- always on ต่างจาก 8 services ที่ sleep (`railway.toml` comment)
+- always on ต่างจาก 8 services ที่ sleep (`.railway/railway.ts` comment)
 - ตัวแปร (ชื่อเท่านั้น): `IDENTITY_DATABASE_URL`, `IDENTITY_SIGNING_KEY_PEM`, `IDENTITY_ISSUER`, `IDENTITY_PLATFORM_ISSUER`, `IDENTITY_PLATFORM_JWKS_URL`, `IDENTITY_GOOGLE_CLIENT_IDS`, `IDENTITY_TOKEN_AUDIENCES`, `IDENTITY_SHARED_SCOPE_PERMISSIONS_JSON`, `IDENTITY_SERVICE_CLIENTS_JSON`, `IDENTITY_DECIDE_MODE`, `IDENTITY_RATE_LIMIT_*`, `SENTRY_DSN`, `SENTRY_ENVIRONMENT` (รายการเต็ม: 16-deployment)
 
 ## 9. ADR สำคัญ
@@ -192,7 +192,7 @@ flowchart TB
 
 อ่านที่ `origin/main` `d76a10c790cba8bd6a3fc5aceab0b7280b4b4376` (2026-11-04):
 
-- `pyproject.toml`, `Dockerfile`, `railway.toml`, `.github/workflows/check.yml`, `README.md`, `PRODUCT.md`, `contract.json`, `DOCPACK/docpack.yaml`, `DOCPACK/00-product-card.md`
+- `pyproject.toml`, `Dockerfile`, `.railway/railway.ts`, `.github/workflows/check.yml`, `README.md`, `PRODUCT.md`, `contract.json`, `DOCPACK/docpack.yaml`, `DOCPACK/00-product-card.md`
 - `src/platform_identity/app.py`, `auth.py`, `google.py`, `keys.py`, `service_clients.py`, `rate_limit.py`, `config.py`, `_sentry.py`, `migrations/0001_token_rate_limit.sql`
 - `tests/service/test_app.py`, `test_service_clients.py`, `test_sentry.py`, `tests/test_drift_checks.py`, `runtime_tests/test_rate_limit.py`
 - `docs/DESIGN-2026-10-13.md`, `docs/SERVICE-CLIENTS.md`, `docs/PLATFORM-SERVICES-CUTOVER.md`, `docs/SHARED-RATE-LIMIT.md`, `docs/diagrams/` (README, 05, 06, 07, 16, 08-adr/*)

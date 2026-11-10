@@ -25,7 +25,7 @@ C4Container
   Rel(api, sentry, "sentry-sdk")
 ```
 
-Sources: `Dockerfile`, `railway.toml`, `pyproject.toml` (`[project.scripts]`), `src/platform_identity/app.py` (`main`, `create_app`, `RateLimiter`), `src/platform_identity/service_clients.py` (`ReplayCache`), `src/platform_identity/keys.py` (`RemoteJwks`, `JWKS_CACHE_SECONDS`), `src/platform_identity/rate_limit.py`, `src/platform_identity/config.py`, `src/platform_identity/migrations/0001_token_rate_limit.sql`, `docs/SHARED-RATE-LIMIT.md`
+Sources: `Dockerfile`, `.railway/railway.ts`, `pyproject.toml` (`[project.scripts]`), `src/platform_identity/app.py` (`main`, `create_app`, `RateLimiter`), `src/platform_identity/service_clients.py` (`ReplayCache`), `src/platform_identity/keys.py` (`RemoteJwks`, `JWKS_CACHE_SECONDS`), `src/platform_identity/rate_limit.py`, `src/platform_identity/config.py`, `src/platform_identity/migrations/0001_token_rate_limit.sql`, `docs/SHARED-RATE-LIMIT.md`
 
 ## Open questions
 

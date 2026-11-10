@@ -24,7 +24,7 @@ flowchart TD
   R4 --> V
 ```
 
-Sources: `docs/SHARED-RATE-LIMIT.md`, `src/platform_identity/rate_limit.py`, `railway.toml`, `docs/PLATFORM-SERVICES-CUTOVER.md` (deploy + checks), `docs/DESIGN-2026-10-13.md` (DB ของ platform-empire), central ADR-0002: [ADR-0002-production-baseline-monitoring-backups.md](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
+Sources: `docs/SHARED-RATE-LIMIT.md`, `src/platform_identity/rate_limit.py`, `.railway/railway.ts`, `docs/PLATFORM-SERVICES-CUTOVER.md` (deploy + checks), `docs/DESIGN-2026-10-13.md` (DB ของ platform-empire), central ADR-0002: [ADR-0002-production-baseline-monitoring-backups.md](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
 
 ## RTO / RPO
 

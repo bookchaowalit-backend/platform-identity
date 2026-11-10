@@ -14,7 +14,7 @@ release = workflow `Check` (`.github/workflows/check.yml`) + deploy มือด
 | R7 | Service clients: `client_credentials` + `private_key_jwt`, single-use jti, bounded by registration (`SERVICE-CLIENTS.md`) | `service_clients.py`, `app.py` `service_token`, `config.py` | `tests/service/test_service_clients.py` (all 20 tests incl. `ReplayCacheTest`, `ServiceClientConfigTest`) | `Check` / service; deployed 2026-11-03 (`a9bbfae`) |
 | R8 | Token endpoint rate limited; local per instance or shared PostgreSQL, fail closed (`SHARED-RATE-LIMIT.md`) | `app.py` `RateLimiter`, `client_address`; `rate_limit.py` | `test_app.py` `test_token_endpoint_is_rate_limited_by_the_last_proxy_hop`; `test_service_clients.py` `test_client_credentials_requests_are_rate_limited`; `runtime_tests/test_rate_limit.py` (two-process, spoofing, outage, grants, migration CLI) | `Check` / service + admission |
 | R9 | Readiness checks DB and limiter, generic 503 (`SHARED-RATE-LIMIT.md`) | `app.py` `readyz`, `rate_limit.bounded_pool` | `runtime_tests/test_rate_limit.py` `test_api_dependency_failure_is_safe_503_and_not_ready`, `test_bounded_primary_pool_readiness_exhaustion_and_lifespan`, `test_privileged_primary_pool_is_not_ready` | `Check` / admission |
-| R10 | Health for Railway health check (`PRODUCT.md`) | `app.py` `health` | none (no direct test of `/health`) | `railway.toml` `healthcheckPath` |
+| R10 | Health for Railway health check (`PRODUCT.md`) | `app.py` `health` | none (no direct test of `/health`) | `.railway/railway.ts` `healthcheckPath` |
 | R11 | Error reporting, scrubbed, errors only (`PRODUCT.md`) | `_sentry.py` | `tests/service/test_sentry.py` (8 tests) | `Check` / service |
 | R12 | Contract valid, docs agree, schema pin (`README.md` Local verification) | `scripts/check.py`, `check_schema_pin.py`, `check_registry_alignment.py` | `tests/test_contract_check.py`, `tests/test_drift_checks.py` | `Check` / service `test-command` |
 | R13 | Migration gate: tenant isolation (`contract.json`) | RLS via `set_config('app.workspace_id')` in `bound`; role check in `bounded_pool` | `runtime_tests/test_rate_limit.py` `test_shared_scope_unknown_or_wrong_workspace_cannot_mint` (partial) | not evidenced in registry |
@@ -22,7 +22,7 @@ release = workflow `Check` (`.github/workflows/check.yml`) + deploy มือด
 | R15 | Migration gate: session parity (`contract.json`) | `decide` shadow | parity test lives in platform-empire `tests/test_identity_shadow.py` (per `README.md`) | gap: no parity report |
 | R16 | Planned: workspace admin API (`identity.http.workspace-admin`) | none | none | not built |
 
-Sources: `PRODUCT.md`, `contract.json`, `docs/SERVICE-CLIENTS.md`, `docs/SHARED-RATE-LIMIT.md`, `src/platform_identity/*.py`, `tests/service/*.py`, `tests/test_*.py`, `runtime_tests/test_rate_limit.py`, `.github/workflows/check.yml`, `railway.toml`, `docs/PLATFORM-SERVICES-CUTOVER.md`
+Sources: `PRODUCT.md`, `contract.json`, `docs/SERVICE-CLIENTS.md`, `docs/SHARED-RATE-LIMIT.md`, `src/platform_identity/*.py`, `tests/service/*.py`, `tests/test_*.py`, `runtime_tests/test_rate_limit.py`, `.github/workflows/check.yml`, `.railway/railway.ts`, `docs/PLATFORM-SERVICES-CUTOVER.md`
 
 ```mermaid
 flowchart LR

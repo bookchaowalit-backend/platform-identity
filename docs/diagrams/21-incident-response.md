@@ -32,7 +32,7 @@ flowchart TD
   V --> PM["Postmortem: append to docs/PLATFORM-SERVICES-CUTOVER.md (no template in repo)"]
 ```
 
-Sources: `PRODUCT.md` (uptime probe, Sentry), `railway.toml`, `src/platform_identity/app.py` (`health`, `readyz`, `jwks`), `src/platform_identity/config.py`, `docs/PLATFORM-SERVICES-CUTOVER.md` (variable change + `Config.from_env` check + redeploy + checks), `docs/DESIGN-2026-10-13.md` ขั้น 3 rollback, `docs/SHARED-RATE-LIMIT.md` (readiness failure causes); Telegram per central [ADR-0002](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
+Sources: `PRODUCT.md` (uptime probe, Sentry), `.railway/railway.ts`, `src/platform_identity/app.py` (`health`, `readyz`, `jwks`), `src/platform_identity/config.py`, `docs/PLATFORM-SERVICES-CUTOVER.md` (variable change + `Config.from_env` check + redeploy + checks), `docs/DESIGN-2026-10-13.md` ขั้น 3 rollback, `docs/SHARED-RATE-LIMIT.md` (readiness failure causes); Telegram per central [ADR-0002](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
 
 ## Blast radius reminder
 

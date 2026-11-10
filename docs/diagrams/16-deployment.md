@@ -20,7 +20,7 @@ flowchart TB
   RUN --> SEN["Sentry (SENTRY_DSN, SENTRY_ENVIRONMENT)"]
 ```
 
-Sources: `Dockerfile`, `railway.toml`, `pyproject.toml`, `src/platform_identity/config.py` (`HOST`, `PORT`), `src/platform_identity/app.py` (`main`), `README.md` (Sentry variables), `docs/PLATFORM-SERVICES-CUTOVER.md` (issuer URL, `railway up --path-as-root`, `--skip-deploys`), `PRODUCT.md` (Host)
+Sources: `Dockerfile`, `.railway/railway.ts`, `pyproject.toml`, `src/platform_identity/config.py` (`HOST`, `PORT`), `src/platform_identity/app.py` (`main`), `README.md` (Sentry variables), `docs/PLATFORM-SERVICES-CUTOVER.md` (issuer URL, `railway up --path-as-root`, `--skip-deploys`), `PRODUCT.md` (Host)
 
 ## Environment (names only)
 
@@ -35,7 +35,7 @@ Sources: `src/platform_identity/config.py`, `docs/PLATFORM-SERVICES-CUTOVER.md`,
 | `/health` | liveness, always 200 with `decide_mode` | Railway health check, platform-uptime-worker (`PRODUCT.md`) |
 | `/readyz` | DB `SELECT 1` + limiter readiness; generic 503 | manual checks after deploy (cutover doc) |
 
-ไม่มี `/healthz` ใน repo นี้; ไม่เปิด Railway sleep (`railway.toml` comment "always on") ต่างจาก 8 platform services ที่เป็น serverless (ops record)
+ไม่มี `/healthz` ใน repo นี้; ไม่เปิด Railway sleep (`.railway/railway.ts` comment "always on") ต่างจาก 8 platform services ที่เป็น serverless (ops record)
 
 ## Known deployments
 

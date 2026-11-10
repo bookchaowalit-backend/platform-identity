@@ -12,7 +12,7 @@ flowchart LR
   UP -->|"down after consecutive failures"| TG["Telegram alert"]
 ```
 
-Sources: `src/platform_identity/_sentry.py`, `src/platform_identity/app.py` (`log.info` lines, `logging.basicConfig`), `railway.toml`, `PRODUCT.md` (Success measures: uptime probe in `platform-uptime-worker` targets, Sentry live, shadow parity log), `README.md`; uptime → Telegram per central [ADR-0002](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
+Sources: `src/platform_identity/_sentry.py`, `src/platform_identity/app.py` (`log.info` lines, `logging.basicConfig`), `.railway/railway.ts`, `PRODUCT.md` (Success measures: uptime probe in `platform-uptime-worker` targets, Sentry live, shadow parity log), `README.md`; uptime → Telegram per central [ADR-0002](https://github.com/bookchaowalit/architecture-docs/blob/main/docs/architecture/decisions/ADR-0002-production-baseline-monitoring-backups.md)
 
 ## What is watched
 
