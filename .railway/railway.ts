@@ -8,7 +8,7 @@ import { defineRailway, github, project, service } from "railway/iac";
 export const partial = "identity-api";
 export default defineRailway(() => {
   const identityApi = service("identity-api", {
-    source: github("bookchaowalit-backend/platform-identity"),
+    source: github("bookchaowalit-backend/platform-identity", { branch: "main", checkSuites: true }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
     healthcheck: "/health",
     healthcheckTimeout: 30,
