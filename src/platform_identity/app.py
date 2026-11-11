@@ -34,7 +34,10 @@ from psycopg.rows import DictRow, dict_row
 from pydantic import BaseModel, Field
 
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
-from platform_identity.config import validate_shared_scope_permissions
+from platform_identity.config import (
+    validate_audience_bundles,
+    validate_shared_scope_permissions,
+)
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
 from platform_identity.rate_limit import RateLimitUnavailable
@@ -136,7 +139,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                trusted_proxies: tuple[str, ...] | None = None, connection_pool: Any = None,
                shared_scope_permissions: Mapping[str,str] | None = None,
                service_clients: Mapping[str, ServiceClient] | None = None,
-               cell_audiences: frozenset[str] = frozenset()) -> FastAPI:
+               cell_audiences: frozenset[str] = frozenset(),
+               audience_bundles: Mapping[str, frozenset[str]] | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -153,6 +157,10 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     # registered cell audience carries both; nothing else gains the platform audience (Finance suite option A).
     if not cell_audiences <= token_audiences or PLATFORM_AUDIENCE in cell_audiences:
         raise ValueError('cell audiences must be available token audiences other than platform-api')
+    # An entry point that forwards one caller token to several services (finance-api → the finance cells) asks for
+    # its own audience and gets every member too; members asked for on their own keep their usual shape.
+    bundles = validate_audience_bundles(
+        {k: sorted(v) for k, v in (audience_bundles or {}).items()}, token_audiences, cell_audiences)
     replays = ReplayCache(clock=clock)
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 
@@ -289,6 +297,10 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         scopes = scope.split() if scope else []
         if len(scopes) > 32 or any(not PERMISSION.match(s) and s not in scope_permissions for s in scopes):
             raise _token_error(400, "invalid_scope", "scope must list permissions")
+        # A shared scope is authorized for the requested audience only; a bundle token would carry it to every
+        # member unchecked, so bundle audiences take canonical permissions only (each member still decides).
+        if audience in bundles and any(s in scope_permissions for s in scopes):
+            raise _token_error(400, "invalid_scope", "a bundle audience takes no shared scopes")
         try:
             external_subject = google.external_subject(subject_token)
         except InvalidIdToken as exc:
@@ -315,7 +327,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
         now = int(clock())
         claims: dict[str, Any] = {
-            "iss": issuer, "aud": [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience,
+            "iss": issuer,
+            "aud": ([audience, *sorted(bundles[audience])] if audience in bundles
+                    else [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience),
             "sub": str(row["id"]), "ws": str(workspace),
             "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
         }
@@ -415,6 +429,7 @@ def main() -> None:
         google=GoogleVerifier(RemoteJwks(GOOGLE_JWKS_URL), config.google_client_ids),
         token_audiences=config.token_audiences,
         cell_audiences=config.cell_audiences,
+        audience_bundles=config.audience_bundles,
         decide_mode=config.decide_mode,
     )
     # Preserve the socket peer; staged mode alone applies explicit proxy trust.

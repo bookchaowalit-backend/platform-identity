@@ -282,6 +282,67 @@ class ServiceTest(unittest.TestCase):
             with self.subTest(cells=cells), self.assertRaises(ValueError):
                 self.cell_client(cells)
 
+    # --- audience bundles (finance suite: finance-api forwards one token to every finance cell) ----
+
+    def bundle_client(self, bundles: dict[str, frozenset[str]] | None = None) -> TestClient:
+        return TestClient(create_app(
+            connect=self.db.connect,
+            platform_verifier=TokenVerifier(StaticKey(self.platform_public), PLATFORM_ISSUER),
+            signing_key=SigningKey(self.signing_private),
+            issuer=ISSUER,
+            google=GoogleVerifier(StaticKey(self.google_public), frozenset({GOOGLE_CLIENT})),
+            token_audiences=frozenset({"tasks-api", "transactions-api", "tax-api", "finance-api"}),
+            cell_audiences=frozenset({"transactions-api"}),
+            audience_bundles=bundles if bundles is not None else {
+                "finance-api": frozenset({"transactions-api", "tax-api", "platform-api"})},
+        ))
+
+    def test_a_bundle_audience_carries_every_member(self) -> None:
+        self.client = self.bundle_client()
+        self.db.members[(str(self.ws), "google:1234567890")] = uuid.uuid4()
+        response = self.exchange(self.id_token(), audience="finance-api")
+        self.assertEqual(response.status_code, 200, response.text)
+        token = response.json()["access_token"]
+        claims = jwt.decode(token, self.signing_public, algorithms=["RS256"], audience="finance-api", issuer=ISSUER)
+        self.assertEqual(claims["aud"], ["finance-api", "platform-api", "tax-api", "transactions-api"])
+        for member in ("transactions-api", "tax-api", "platform-api"):
+            jwt.decode(token, self.signing_public, algorithms=["RS256"], audience=member, issuer=ISSUER)
+        # A member asked for on its own keeps its own shape (cell audience or single).
+        self.assertEqual(jwt.decode(self.exchange(self.id_token(), audience="tax-api").json()["access_token"],
+                                    self.signing_public, algorithms=["RS256"], audience="tax-api",
+                                    issuer=ISSUER)["aud"], "tax-api")
+
+    def test_a_bundle_audience_takes_no_shared_scopes(self) -> None:
+        self.client = TestClient(create_app(
+            connect=self.db.connect,
+            platform_verifier=TokenVerifier(StaticKey(self.platform_public), PLATFORM_ISSUER),
+            signing_key=SigningKey(self.signing_private),
+            issuer=ISSUER,
+            google=GoogleVerifier(StaticKey(self.google_public), frozenset({GOOGLE_CLIENT})),
+            token_audiences=frozenset({"tax-api", "finance-api"}),
+            shared_scope_permissions={"quotas:service": "data.quota:write"},
+            audience_bundles={"finance-api": frozenset({"tax-api"})},
+        ))
+        self.db.members[(str(self.ws), "google:1234567890")] = uuid.uuid4()
+        refused = self.exchange(self.id_token(), audience="finance-api", scope="quotas:service")
+        self.assertEqual(refused.status_code, 400, refused.text)
+        self.assertEqual(refused.json()["error"], "invalid_scope")
+        allowed = self.exchange(self.id_token(), audience="finance-api", scope="tax.tax-item:read")
+        self.assertEqual(allowed.status_code, 200, allowed.text)
+
+    def test_bundles_must_name_available_audiences(self) -> None:
+        for bundles in (
+            {"budgets-api": frozenset({"tax-api"})},             # key not issuable
+            {"finance-api": frozenset({"budgets-api"})},         # member not issuable
+            {"platform-api": frozenset({"tax-api"})},            # the platform itself
+            {"transactions-api": frozenset({"tax-api"})},        # already a cell audience
+            {"finance-api": frozenset({"finance-api"})},         # itself
+            {"finance-api": frozenset()},                        # empty
+            {"finance-api": frozenset({"tax-api"}), "tax-api": frozenset({"tasks-api"})},  # chained
+        ):
+            with self.subTest(bundles=bundles), self.assertRaises(ValueError):
+                self.bundle_client(bundles)
+
     def test_token_endpoint_is_rate_limited_by_the_last_proxy_hop(self) -> None:
         def call(forwarded: str) -> int:
             data = {"grant_type": TOKEN_EXCHANGE, "subject_token": "x", "subject_token_type": ID_TOKEN_TYPE,

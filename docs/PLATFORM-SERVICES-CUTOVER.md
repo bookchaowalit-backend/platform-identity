@@ -126,3 +126,31 @@ for one of them is minted with `aud=[<cell>-api, "platform-api"]`, the same shap
 Activation needs, per cell: the audience in `IDENTITY_TOKEN_AUDIENCES` and `IDENTITY_CELL_AUDIENCES`; the cell's
 `<CELL>_JWT_IDENTITY_ISSUER` / `_JWT_IDENTITY_JWKS_URL` (cellkit SPEC-004); tasks-api `TASKS_API_IDENTITY_ISSUER` /
 `TASKS_API_IDENTITY_PUBLIC_KEY_PEM`; and `IDENTITY_GOOGLE_CLIENT_IDS`.
+
+## Audience bundles (finance suite, owner go 2026-11-11)
+
+finance-api forwards one caller token to all ten finance cells and, through them, to tasks-api, so that token must
+carry every one of those audiences. `IDENTITY_AUDIENCE_BUNDLES_JSON` maps an issuable audience to its members:
+
+```json
+{"finance-api": ["finance-accounts-api", "transactions-api", "budgets-api", "cash-flow-api",
+  "reconciliations-api", "business-assets-api", "investments-api", "liabilities-api",
+  "subscriptions-api", "tax-api", "platform-api"]}
+```
+
+A token exchanged for `finance-api` is minted with `aud=["finance-api", <members sorted>]`; a member asked for on
+its own keeps its usual shape (cell audience or single). Rules, checked at start (bad value = the service does not
+start): the key is in `IDENTITY_TOKEN_AUDIENCES`, is not `platform-api` and not a cell audience; each member is
+another `IDENTITY_TOKEN_AUDIENCES` entry or `platform-api`; 1–16 members; no duplicate keys. Service-client tokens
+never get bundles. Lifetime stays 3600 s. Unset = no change. Rollback: unset the variable and redeploy.
+
+Trade-off accepted by the owner: a finance-api token is also a valid bearer for each finance cell **and, through
+`platform-api`, for every service that verifies that audience** (tasks-api and any other default-audience verifier)
+for its hour; finance-api forwards it, so eleven services hold it. Cells still decide every action through
+`/v1/authz/decide`, so it grants nothing the person could not already do, but a leaked token reaches more places.
+A bundle audience therefore takes canonical permissions only as `scope` (a shared scope is refused, 400
+`invalid_scope`): shared scopes are authorized for the requested audience alone and must not ride along to members.
+Bundles do not chain (a member may not be another bundle key); a member that is a cell audience is carried by name
+only. If the blast radius becomes a problem, shorten the bundle token lifetime first.
+Activation needs `finance-api` and the ten cell audiences in `IDENTITY_TOKEN_AUDIENCES`, the cells' and finance-api's
+identity-issuer settings (SPEC-004), and `IDENTITY_GOOGLE_CLIENT_IDS`.

@@ -10,6 +10,8 @@
 ``IDENTITY_PLATFORM_MAX_LIFETIME``    delegated token lifetime limit (seconds)
 ``IDENTITY_GOOGLE_CLIENT_IDS`` comma-separated Google OAuth client IDs
 ``IDENTITY_TOKEN_AUDIENCES``   audiences ``/v1/token`` may issue for
+``IDENTITY_AUDIENCE_BUNDLES_JSON``  ``{"<audience>": [members]}``: a token exchanged
+                               for the key also carries every member (docs/PLATFORM-SERVICES-CUTOVER.md)
 ``IDENTITY_SERVICE_CLIENTS_JSON``  registered service clients (public keys only;
                                docs/SERVICE-CLIENTS.md)
 ``IDENTITY_DECIDE_MODE``       ``shadow`` (default: decide, record nothing) or
@@ -28,12 +30,38 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from platform_identity.auth import HARD_MAX_LIFETIME_SECONDS, MAX_LIFETIME_SECONDS
+from platform_identity.auth import (
+    HARD_MAX_LIFETIME_SECONDS,
+    MAX_LIFETIME_SECONDS,
+    PLATFORM_AUDIENCE,
+)
 from platform_identity.keys import require_https
 from platform_identity.service_clients import ServiceClient, parse_service_clients
 
 DECIDE_MODES = ("shadow", "record")
+MAX_BUNDLE = 16
 AUDIENCE_PATTERN = "^[a-z][a-z0-9-]{1,62}$"
+
+
+def validate_audience_bundles(raw: object, audiences: frozenset[str],
+                              cells: frozenset[str]) -> dict[str, frozenset[str]]:
+    """``{"<audience>": [members]}``; ValueError unless every key is issuable, not the platform and not a cell
+    audience, and every member is another issuable audience or platform-api (at most MAX_BUNDLE)."""
+    if not isinstance(raw, dict):
+        raise ValueError("bundles must be an object")
+    bundles: dict[str, frozenset[str]] = {}
+    for key, members in raw.items():
+        if (not isinstance(key, str) or key not in audiences or key == PLATFORM_AUDIENCE or key in cells
+                or not isinstance(members, list) or not 0 < len(members) <= MAX_BUNDLE):
+            raise ValueError("bad bundle")
+        if any(not isinstance(m, str) or not re.fullmatch(AUDIENCE_PATTERN, m) or m == key
+               or (m not in audiences and m != PLATFORM_AUDIENCE) for m in members):
+            raise ValueError("bad bundle member")
+        bundles[key] = frozenset(members)
+    # Bundles do not chain: a member that is itself a bundle key would not bring its own members along.
+    if any(m in bundles for members in bundles.values() for m in members):
+        raise ValueError("a bundle member is another bundle")
+    return bundles
 
 
 _CANONICAL = re.compile(r'[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*:(read|write|delete|approve|admin)')
@@ -93,6 +121,8 @@ class Config:
 
     # IDENTITY_CELL_AUDIENCES: cell APIs whose exchanged tokens also carry platform-api (subset of token_audiences).
     cell_audiences: frozenset[str] = frozenset()
+    # IDENTITY_AUDIENCE_BUNDLES_JSON: an exchanged token for the key also carries every member (finance-api → cells).
+    audience_bundles: Mapping[str, frozenset[str]] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
@@ -129,6 +159,15 @@ class Config:
         cells = frozenset(a.strip() for a in env.get("IDENTITY_CELL_AUDIENCES", "").split(",") if a.strip())
         if not cells <= audiences or "platform-api" in cells:
             raise ConfigError("IDENTITY_CELL_AUDIENCES must list IDENTITY_TOKEN_AUDIENCES entries other than platform-api")
+        try:
+            raw_bundles = env.get("IDENTITY_AUDIENCE_BUNDLES_JSON", "").strip() or "{}"
+            if len(raw_bundles) > 8192:
+                raise ValueError()
+            bundles = validate_audience_bundles(json.loads(raw_bundles, object_pairs_hook=_unique_pairs),
+                                                audiences, cells)
+        except (TypeError, ValueError, RecursionError):
+            raise ConfigError("IDENTITY_AUDIENCE_BUNDLES_JSON must map an issuable audience to a list of other issuable"
+                              " audiences or platform-api") from None
         def integer(name: str, default: int, minimum: int, maximum: int) -> int:
             try:
                 number = int(env.get(name,str(default)))
@@ -200,6 +239,7 @@ class Config:
                                         if c.strip()),
             token_audiences=audiences,
             cell_audiences=cells,
+            audience_bundles=MappingProxyType(bundles),
             decide_mode=mode,
             host=env.get("HOST", "0.0.0.0"),
             port=int(env.get("PORT", "8080")),

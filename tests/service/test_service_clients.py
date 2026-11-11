@@ -282,6 +282,22 @@ class ServiceClientConfigTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 Config.from_env(env)
 
+    def test_config_reads_audience_bundles(self) -> None:
+        env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": key_pair()[0],
+               "IDENTITY_ISSUER": ISSUER, "IDENTITY_PLATFORM_ISSUER": PLATFORM_ISSUER,
+               "IDENTITY_PLATFORM_PUBLIC_KEY_PEM": self.public,
+               "IDENTITY_TOKEN_AUDIENCES": "finance-api,transactions-api,tax-api"}
+        self.assertEqual(dict(Config.from_env(env).audience_bundles), {})
+        env["IDENTITY_AUDIENCE_BUNDLES_JSON"] = json.dumps({"finance-api": ["transactions-api", "tax-api", "platform-api"]})
+        self.assertEqual(dict(Config.from_env(env).audience_bundles),
+                         {"finance-api": frozenset({"transactions-api", "tax-api", "platform-api"})})
+        for bad in ('{"finance-api": ["budgets-api"]}', '{"finance-api": "tax-api"}', '["finance-api"]',
+                    '{"finance-api": ["tax-api"], "finance-api": ["tax-api"]}', 'not json',
+                    '{"finance-api": ["Bad Audience"]}'):
+            env["IDENTITY_AUDIENCE_BUNDLES_JSON"] = bad
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                Config.from_env(env)
+
     def test_config_reads_the_registry_from_the_environment(self) -> None:
         signing_private = key_pair()[0]
         env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": signing_private,
