@@ -242,6 +242,46 @@ class ServiceTest(unittest.TestCase):
                 self.assertEqual(response.status_code, status, response.text)
                 self.assertEqual(response.json()["error"], error)
 
+    # --- cell audiences (Finance suite option A, owner go 2026-11-11) ----------------------------
+
+    def cell_client(self, cells: frozenset[str] = frozenset({"transactions-api"})) -> TestClient:
+        return TestClient(create_app(
+            connect=self.db.connect,
+            platform_verifier=TokenVerifier(StaticKey(self.platform_public), PLATFORM_ISSUER),
+            signing_key=SigningKey(self.signing_private),
+            issuer=ISSUER,
+            google=GoogleVerifier(StaticKey(self.google_public), frozenset({GOOGLE_CLIENT})),
+            token_audiences=frozenset({"tasks-api", "transactions-api"}),
+            cell_audiences=cells,
+        ))
+
+    def test_a_cell_audience_also_carries_the_platform_audience(self) -> None:
+        """Cells forward the caller token to /v1/authz/decide and /v1/executions (audience platform-api)."""
+        self.client = self.cell_client()
+        identity = uuid.uuid4()
+        self.db.members[(str(self.ws), "google:1234567890")] = identity
+        response = self.exchange(self.id_token(), audience="transactions-api")
+        self.assertEqual(response.status_code, 200, response.text)
+        token = response.json()["access_token"]
+        claims = jwt.decode(token, self.signing_public, algorithms=["RS256"], audience="transactions-api",
+                            issuer=ISSUER)
+        self.assertEqual(claims["aud"], ["transactions-api", "platform-api"])
+        jwt.decode(token, self.signing_public, algorithms=["RS256"], audience="platform-api", issuer=ISSUER)
+        self.assertLessEqual(claims["exp"] - claims["iat"], 3600)
+        self.assertNotIn("del", claims)
+
+    def test_other_audiences_keep_a_single_audience(self) -> None:
+        self.client = self.cell_client()
+        self.db.members[(str(self.ws), "google:1234567890")] = uuid.uuid4()
+        token = self.exchange(self.id_token(), audience="tasks-api").json()["access_token"]
+        claims = jwt.decode(token, self.signing_public, algorithms=["RS256"], audience="tasks-api", issuer=ISSUER)
+        self.assertEqual(claims["aud"], "tasks-api")
+
+    def test_cell_audiences_must_be_available_and_never_the_platform_itself(self) -> None:
+        for cells in (frozenset({"budgets-api"}), frozenset({"platform-api"})):
+            with self.subTest(cells=cells), self.assertRaises(ValueError):
+                self.cell_client(cells)
+
     def test_token_endpoint_is_rate_limited_by_the_last_proxy_hop(self) -> None:
         def call(forwarded: str) -> int:
             data = {"grant_type": TOKEN_EXCHANGE, "subject_token": "x", "subject_token_type": ID_TOKEN_TYPE,

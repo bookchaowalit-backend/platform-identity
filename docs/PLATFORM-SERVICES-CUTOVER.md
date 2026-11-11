@@ -113,3 +113,16 @@ the `ai-gateway` / workflow worker service clients.
   `quotas:service`, the same way the workflow worker does.
 - **Cells.** The existing cells still trust `empire-platform`; their cutover is
   the design's step 6 and is unchanged by this note.
+
+## Cell audiences (Finance suite option A, owner go 2026-11-11)
+
+Cell APIs (finance cells and the other cellkit services) forward the caller's token to tasks-api
+`/v1/authz/decide` and `/v1/executions`, which verify audience `platform-api`. `IDENTITY_CELL_AUDIENCES`
+(comma list, a subset of `IDENTITY_TOKEN_AUDIENCES`, never `platform-api`) names those cells: a token exchanged
+for one of them is minted with `aud=[<cell>-api, "platform-api"]`, the same shape as the platform's own
+`empire-dev-token` audiences. Every other audience and every service-client token keep a single audience; the
+3600 s lifetime is unchanged. Unset = no change. Rollback: unset the variable and redeploy.
+
+Activation needs, per cell: the audience in `IDENTITY_TOKEN_AUDIENCES` and `IDENTITY_CELL_AUDIENCES`; the cell's
+`<CELL>_JWT_IDENTITY_ISSUER` / `_JWT_IDENTITY_JWKS_URL` (cellkit SPEC-004); tasks-api `TASKS_API_IDENTITY_ISSUER` /
+`TASKS_API_IDENTITY_PUBLIC_KEY_PEM`; and `IDENTITY_GOOGLE_CLIENT_IDS`.

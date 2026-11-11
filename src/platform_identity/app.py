@@ -122,6 +122,9 @@ def client_address(request: Request, *, trusted_proxies: tuple[str, ...] | None 
         return peer
 
 
+PLATFORM_AUDIENCE = "platform-api"
+
+
 def _token_error(status: int, error: str, description: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"error": error, "error_description": description},
                          headers={"Cache-Control": "no-store"})
@@ -132,7 +135,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                clock: Callable[[], float] = time.time, rate_limiter: Any = None,
                trusted_proxies: tuple[str, ...] | None = None, connection_pool: Any = None,
                shared_scope_permissions: Mapping[str,str] | None = None,
-               service_clients: Mapping[str, ServiceClient] | None = None) -> FastAPI:
+               service_clients: Mapping[str, ServiceClient] | None = None,
+               cell_audiences: frozenset[str] = frozenset()) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -145,6 +149,10 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     clients = dict(service_clients or {})
     if any(not c.audiences <= token_audiences for c in clients.values()):
         raise ValueError('service clients may only be registered for available token audiences')
+    # Cell APIs forward the caller token to the platform PDP (audience platform-api), so a token exchanged for a
+    # registered cell audience carries both; nothing else gains the platform audience (Finance suite option A).
+    if not cell_audiences <= token_audiences or PLATFORM_AUDIENCE in cell_audiences:
+        raise ValueError('cell audiences must be available token audiences other than platform-api')
     replays = ReplayCache(clock=clock)
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 
@@ -307,7 +315,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
         now = int(clock())
         claims: dict[str, Any] = {
-            "iss": issuer, "aud": audience, "sub": str(row["id"]), "ws": str(workspace),
+            "iss": issuer, "aud": [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience,
+            "sub": str(row["id"]), "ws": str(workspace),
             "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
         }
         if scopes:
@@ -405,6 +414,7 @@ def main() -> None:
         issuer=config.issuer,
         google=GoogleVerifier(RemoteJwks(GOOGLE_JWKS_URL), config.google_client_ids),
         token_audiences=config.token_audiences,
+        cell_audiences=config.cell_audiences,
         decide_mode=config.decide_mode,
     )
     # Preserve the socket peer; staged mode alone applies explicit proxy trust.

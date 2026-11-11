@@ -269,6 +269,19 @@ class ServiceClientConfigTest(unittest.TestCase):
             with self.subTest(name), self.assertRaises(ValueError):
                 parse_service_clients(raw)
 
+    def test_config_reads_cell_audiences(self) -> None:
+        env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": key_pair()[0],
+               "IDENTITY_ISSUER": ISSUER, "IDENTITY_PLATFORM_ISSUER": PLATFORM_ISSUER,
+               "IDENTITY_PLATFORM_PUBLIC_KEY_PEM": self.public,
+               "IDENTITY_TOKEN_AUDIENCES": "tasks-api,transactions-api,tax-api"}
+        self.assertEqual(Config.from_env(env).cell_audiences, frozenset())
+        env["IDENTITY_CELL_AUDIENCES"] = "transactions-api, tax-api"
+        self.assertEqual(Config.from_env(env).cell_audiences, frozenset({"transactions-api", "tax-api"}))
+        for bad in ("budgets-api", "platform-api", "Bad Audience"):
+            env["IDENTITY_CELL_AUDIENCES"] = bad
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                Config.from_env(env)
+
     def test_config_reads_the_registry_from_the_environment(self) -> None:
         signing_private = key_pair()[0]
         env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": signing_private,

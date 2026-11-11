@@ -91,6 +91,9 @@ class Config:
     shared_scope_permissions: Mapping[str,str] = field(default_factory=lambda:MappingProxyType({}))
     service_clients: Mapping[str, ServiceClient] = field(default_factory=lambda: MappingProxyType({}))
 
+    # IDENTITY_CELL_AUDIENCES: cell APIs whose exchanged tokens also carry platform-api (subset of token_audiences).
+    cell_audiences: frozenset[str] = frozenset()
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
         def required(name: str) -> str:
@@ -123,6 +126,9 @@ class Config:
         audiences = frozenset(a.strip() for a in env.get("IDENTITY_TOKEN_AUDIENCES", "").split(",") if a.strip())
         if any(not re.match(AUDIENCE_PATTERN, a) for a in audiences):
             raise ConfigError("IDENTITY_TOKEN_AUDIENCES holds an invalid audience")
+        cells = frozenset(a.strip() for a in env.get("IDENTITY_CELL_AUDIENCES", "").split(",") if a.strip())
+        if not cells <= audiences or "platform-api" in cells:
+            raise ConfigError("IDENTITY_CELL_AUDIENCES must list IDENTITY_TOKEN_AUDIENCES entries other than platform-api")
         def integer(name: str, default: int, minimum: int, maximum: int) -> int:
             try:
                 number = int(env.get(name,str(default)))
@@ -193,6 +199,7 @@ class Config:
             google_client_ids=frozenset(c.strip() for c in env.get("IDENTITY_GOOGLE_CLIENT_IDS", "").split(",")
                                         if c.strip()),
             token_audiences=audiences,
+            cell_audiences=cells,
             decide_mode=mode,
             host=env.get("HOST", "0.0.0.0"),
             port=int(env.get("PORT", "8080")),
