@@ -330,6 +330,35 @@ class ServiceTest(unittest.TestCase):
         allowed = self.exchange(self.id_token(), audience="finance-api", scope="tax.tax-item:read")
         self.assertEqual(allowed.status_code, 200, allowed.text)
 
+    def test_a_bundle_token_lives_shorter_than_others(self) -> None:
+        """A bundle token opens every member, so it lives IDENTITY_BUNDLE_TOKEN_TTL_SECONDS (default 300)."""
+        self.client = self.bundle_client()
+        self.db.members[(str(self.ws), "google:1234567890")] = uuid.uuid4()
+        bundle = self.exchange(self.id_token(), audience="finance-api").json()
+        claims = jwt.decode(bundle["access_token"], self.signing_public, algorithms=["RS256"],
+                            audience="finance-api", issuer=ISSUER)
+        self.assertEqual((bundle["expires_in"], claims["exp"] - claims["iat"]), (300, 300))
+        single = self.exchange(self.id_token(), audience="tax-api").json()
+        claims = jwt.decode(single["access_token"], self.signing_public, algorithms=["RS256"],
+                            audience="tax-api", issuer=ISSUER)
+        self.assertEqual((single["expires_in"], claims["exp"] - claims["iat"]), (600, 600))
+
+    def test_the_bundle_token_lifetime_is_configurable_within_bounds(self) -> None:
+        def app(ttl: int) -> TestClient:
+            return TestClient(create_app(
+                connect=self.db.connect,
+                platform_verifier=TokenVerifier(StaticKey(self.platform_public), PLATFORM_ISSUER),
+                signing_key=SigningKey(self.signing_private), issuer=ISSUER,
+                google=GoogleVerifier(StaticKey(self.google_public), frozenset({GOOGLE_CLIENT})),
+                token_audiences=frozenset({"tax-api", "finance-api"}),
+                audience_bundles={"finance-api": frozenset({"tax-api"})}, bundle_token_ttl=ttl))
+        self.client = app(120)
+        self.db.members[(str(self.ws), "google:1234567890")] = uuid.uuid4()
+        self.assertEqual(self.exchange(self.id_token(), audience="finance-api").json()["expires_in"], 120)
+        for bad in (0, 59, 601):
+            with self.subTest(ttl=bad), self.assertRaises(ValueError):
+                app(bad)
+
     def test_bundles_must_name_available_audiences(self) -> None:
         for bundles in (
             {"budgets-api": frozenset({"tax-api"})},             # key not issuable

@@ -298,6 +298,18 @@ class ServiceClientConfigTest(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ConfigError):
                 Config.from_env(env)
 
+    def test_config_reads_the_bundle_token_lifetime(self) -> None:
+        env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": key_pair()[0],
+               "IDENTITY_ISSUER": ISSUER, "IDENTITY_PLATFORM_ISSUER": PLATFORM_ISSUER,
+               "IDENTITY_PLATFORM_PUBLIC_KEY_PEM": self.public}
+        self.assertEqual(Config.from_env(env).bundle_token_ttl, 300)
+        env["IDENTITY_BUNDLE_TOKEN_TTL_SECONDS"] = "180"
+        self.assertEqual(Config.from_env(env).bundle_token_ttl, 180)
+        for bad in ("0", "59", "601", "five"):
+            env["IDENTITY_BUNDLE_TOKEN_TTL_SECONDS"] = bad
+            with self.subTest(bad=bad), self.assertRaises(ConfigError):
+                Config.from_env(env)
+
     def test_config_reads_the_registry_from_the_environment(self) -> None:
         signing_private = key_pair()[0]
         env = {"IDENTITY_DATABASE_URL": "postgresql://x", "IDENTITY_SIGNING_KEY_PEM": signing_private,

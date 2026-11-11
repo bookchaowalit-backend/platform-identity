@@ -142,7 +142,11 @@ A token exchanged for `finance-api` is minted with `aud=["finance-api", <members
 its own keeps its usual shape (cell audience or single). Rules, checked at start (bad value = the service does not
 start): the key is in `IDENTITY_TOKEN_AUDIENCES`, is not `platform-api` and not a cell audience; each member is
 another `IDENTITY_TOKEN_AUDIENCES` entry or `platform-api`; 1–16 members; no duplicate keys. Service-client tokens
-never get bundles. Lifetime stays 3600 s. Unset = no change. Rollback: unset the variable and redeploy.
+never get bundles. Unset = no change. Rollback: unset the variable and redeploy.
+
+A bundle token opens every member, so it lives shorter than other tokens: `IDENTITY_BUNDLE_TOKEN_TTL_SECONDS`
+(60–600, default 300; security review 2026-11-11, option C). Other exchanged and service-client tokens stay 600 s.
+Clients refresh with the same `/v1/token` exchange before `expires_in` runs out.
 
 Trade-off accepted by the owner: a finance-api token is also a valid bearer for each finance cell **and, through
 `platform-api`, for every service that verifies that audience** (tasks-api and any other default-audience verifier)
