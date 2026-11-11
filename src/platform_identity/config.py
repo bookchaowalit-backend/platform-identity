@@ -27,9 +27,11 @@ import json
 import math
 import os
 import re
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
+from urllib.parse import urlsplit
 
 from platform_identity.auth import (
     HARD_MAX_LIFETIME_SECONDS,
@@ -126,6 +128,12 @@ class Config:
     audience_bundles: Mapping[str, frozenset[str]] = field(default_factory=lambda: MappingProxyType({}))
     # IDENTITY_BUNDLE_TOKEN_TTL_SECONDS: a bundle token opens every member, so it lives shorter (app.BUNDLE_TOKEN_TTL_*).
     bundle_token_ttl: int = 300
+    # SPEC-005 paid audiences: IDENTITY_ENTITLEMENT_MODE off|shadow|enforce, _URL (finance-api), _SUBJECT (uuid),
+    # _CEILINGS_JSON {"finance-api": [":read"/":delete" permissions]} = what a token keeps without a current pass.
+    entitlement_mode: str = "off"
+    entitlement_url: str | None = None
+    entitlement_subject: uuid.UUID | None = None
+    entitlement_ceilings: Mapping[str, frozenset[str]] = field(default_factory=lambda: MappingProxyType({}))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
@@ -180,6 +188,34 @@ class Config:
                 raise ConfigError(f'{name} is out of range')
             return number
         bundle_ttl = integer("IDENTITY_BUNDLE_TOKEN_TTL_SECONDS", 300, 60, 600)
+
+        ent_mode = env.get("IDENTITY_ENTITLEMENT_MODE", "off").strip() or "off"
+        if ent_mode not in ("off", "shadow", "enforce"):
+            raise ConfigError("IDENTITY_ENTITLEMENT_MODE must be off, shadow or enforce")
+        ent_url, ent_subject, ceilings = None, None, {}
+        if ent_mode != "off":
+            ent_url = env.get("IDENTITY_ENTITLEMENT_URL", "").strip()
+            parts = urlsplit(ent_url)
+            if parts.scheme != "https" or not parts.hostname or parts.username or parts.query:
+                raise ConfigError("IDENTITY_ENTITLEMENT_URL must be a plain https origin")
+            try:
+                ent_subject = uuid.UUID(env.get("IDENTITY_ENTITLEMENT_SUBJECT", "").strip())
+            except ValueError:
+                raise ConfigError("IDENTITY_ENTITLEMENT_SUBJECT must be a UUID") from None
+            try:
+                raw = json.loads(env.get("IDENTITY_ENTITLEMENT_CEILINGS_JSON", "") or "{}", object_pairs_hook=_unique_pairs)
+                if not isinstance(raw, dict) or not raw:
+                    raise ValueError()
+                for aud, perms in raw.items():
+                    if aud not in bundles or not isinstance(perms, list) or not 1 <= len(perms) <= 128:
+                        raise ValueError()
+                    if any(not isinstance(p, str) or not _CANONICAL.fullmatch(p)
+                           or not p.endswith((":read", ":delete")) for p in perms):
+                        raise ValueError()
+                    ceilings[aud] = frozenset(perms)
+            except (TypeError, ValueError, RecursionError):
+                raise ConfigError("IDENTITY_ENTITLEMENT_CEILINGS_JSON must map bundle audiences to 1..128 :read or"
+                                  " :delete permissions") from None
 
         rate_mode = env.get('IDENTITY_RATE_LIMIT_MODE','local').strip()
         if rate_mode not in ('local','postgres'):
@@ -245,6 +281,10 @@ class Config:
             cell_audiences=cells,
             audience_bundles=MappingProxyType(bundles),
             bundle_token_ttl=bundle_ttl,
+            entitlement_mode=ent_mode,
+            entitlement_url=ent_url,
+            entitlement_subject=ent_subject,
+            entitlement_ceilings=MappingProxyType(ceilings),
             decide_mode=mode,
             host=env.get("HOST", "0.0.0.0"),
             port=int(env.get("PORT", "8080")),

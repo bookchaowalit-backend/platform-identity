@@ -38,6 +38,7 @@ from platform_identity.config import (
     validate_audience_bundles,
     validate_shared_scope_permissions,
 )
+from platform_identity.entitlement import Entitlement, finance_lookup
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
 from platform_identity.rate_limit import RateLimitUnavailable
@@ -144,7 +145,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                service_clients: Mapping[str, ServiceClient] | None = None,
                cell_audiences: frozenset[str] = frozenset(),
                audience_bundles: Mapping[str, frozenset[str]] | None = None,
-               bundle_token_ttl: int = BUNDLE_TOKEN_TTL_SECONDS) -> FastAPI:
+               bundle_token_ttl: int = BUNDLE_TOKEN_TTL_SECONDS,
+               entitlement: Entitlement | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -168,6 +170,15 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     low, high = BUNDLE_TOKEN_TTL_RANGE
     if not low <= bundle_token_ttl <= high:
         raise ValueError(f"bundle_token_ttl must be {low}..{high} seconds")
+    # SPEC-005: a paid audience must be a bundle audience (the one token that reaches the cells).
+    if entitlement is not None and not set(entitlement.ceilings) <= set(bundles):
+        raise ValueError('entitlement ceilings must name audience bundles')
+    # A paid bundle's members are paid too: asking for a cell audience on its own must not skip the ceiling.
+    paid_ceiling: dict[str, frozenset[str]] = {}
+    for key, ceiling in (entitlement.ceilings.items() if entitlement is not None else ()):
+        for name in (key, *bundles[key]):
+            if name != PLATFORM_AUDIENCE:
+                paid_ceiling[name] = paid_ceiling.get(name, frozenset()) | ceiling
     replays = ReplayCache(clock=clock)
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 
@@ -332,6 +343,18 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         if row is None:
             # Same answer for an unknown person and a non-member, so membership does not leak.
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
+        granted = sorted(set(scopes))
+        if entitlement is not None and entitlement.mode != "off" and audience in paid_ceiling:
+            paid = entitlement.active(workspace)
+            if paid is None:
+                log.warning("entitlement unknown audience=%s; token issued (fail open)", audience)
+            elif not paid:
+                log.info("pass missing audience=%s mode=%s", audience, entitlement.mode)
+                if entitlement.mode == "enforce":
+                    ceiling = paid_ceiling[audience]
+                    granted = sorted(set(scopes) & ceiling) if scopes else sorted(ceiling)
+                    if not granted:
+                        raise _token_error(400, "invalid_scope", "pass_required")
         now = int(clock())
         ttl = bundle_token_ttl if audience in bundles else ACCESS_TOKEN_TTL_SECONDS
         claims: dict[str, Any] = {
@@ -341,8 +364,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "sub": str(row["id"]), "ws": str(workspace),
             "iat": now, "exp": now + ttl, "jti": str(uuid.uuid4()),
         }
-        if scopes:
-            claims["scope"] = " ".join(sorted(set(scopes)))
+        if granted:
+            claims["scope"] = " ".join(granted)
         log.info("token issued audience=%s", audience)
         return JSONResponse({
             "access_token": signing_key.sign(claims),
@@ -440,6 +463,10 @@ def main() -> None:
         audience_bundles=config.audience_bundles,
         bundle_token_ttl=config.bundle_token_ttl,
         decide_mode=config.decide_mode,
+        entitlement=None if config.entitlement_mode == "off" else Entitlement(
+            config.entitlement_mode, config.entitlement_ceilings,
+            finance_lookup(str(config.entitlement_url), cast(uuid.UUID, config.entitlement_subject),
+                           SigningKey(config.signing_key_pem), config.issuer)),
     )
     # Preserve the socket peer; staged mode alone applies explicit proxy trust.
     uvicorn.run(app, host=config.host, port=config.port, proxy_headers=False,
