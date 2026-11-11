@@ -58,6 +58,9 @@ TOKEN_EXCHANGE = "urn:ietf:params:oauth:grant-type:token-exchange"
 ID_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id_token"
 ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 ACCESS_TOKEN_TTL_SECONDS = 600
+# A bundle token opens every member service, so it lives shorter (security review 2026-11-11, option C).
+BUNDLE_TOKEN_TTL_SECONDS = 300
+BUNDLE_TOKEN_TTL_RANGE = (60, ACCESS_TOKEN_TTL_SECONDS)
 TOKEN_REQUESTS_PER_MINUTE = 30
 Auth = Annotated[str | None, Header()]
 Channel = Annotated[str | None, Header(alias="x-empire-channel")]
@@ -140,7 +143,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                shared_scope_permissions: Mapping[str,str] | None = None,
                service_clients: Mapping[str, ServiceClient] | None = None,
                cell_audiences: frozenset[str] = frozenset(),
-               audience_bundles: Mapping[str, frozenset[str]] | None = None) -> FastAPI:
+               audience_bundles: Mapping[str, frozenset[str]] | None = None,
+               bundle_token_ttl: int = BUNDLE_TOKEN_TTL_SECONDS) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -161,6 +165,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     # its own audience and gets every member too; members asked for on their own keep their usual shape.
     bundles = validate_audience_bundles(
         {k: sorted(v) for k, v in (audience_bundles or {}).items()}, token_audiences, cell_audiences)
+    low, high = BUNDLE_TOKEN_TTL_RANGE
+    if not low <= bundle_token_ttl <= high:
+        raise ValueError(f"bundle_token_ttl must be {low}..{high} seconds")
     replays = ReplayCache(clock=clock)
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 
@@ -326,12 +333,13 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             # Same answer for an unknown person and a non-member, so membership does not leak.
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
         now = int(clock())
+        ttl = bundle_token_ttl if audience in bundles else ACCESS_TOKEN_TTL_SECONDS
         claims: dict[str, Any] = {
             "iss": issuer,
             "aud": ([audience, *sorted(bundles[audience])] if audience in bundles
                     else [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience),
             "sub": str(row["id"]), "ws": str(workspace),
-            "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
+            "iat": now, "exp": now + ttl, "jti": str(uuid.uuid4()),
         }
         if scopes:
             claims["scope"] = " ".join(sorted(set(scopes)))
@@ -340,7 +348,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "access_token": signing_key.sign(claims),
             "issued_token_type": ACCESS_TOKEN_TYPE,
             "token_type": "Bearer",
-            "expires_in": ACCESS_TOKEN_TTL_SECONDS,
+            "expires_in": ttl,
         }, headers={"Cache-Control": "no-store"})
 
     def service_token(audience: str, scope: str | None, assertion_type: str | None, assertion: str | None,
@@ -430,6 +438,7 @@ def main() -> None:
         token_audiences=config.token_audiences,
         cell_audiences=config.cell_audiences,
         audience_bundles=config.audience_bundles,
+        bundle_token_ttl=config.bundle_token_ttl,
         decide_mode=config.decide_mode,
     )
     # Preserve the socket peer; staged mode alone applies explicit proxy trust.

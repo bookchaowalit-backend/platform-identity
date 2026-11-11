@@ -12,6 +12,7 @@
 ``IDENTITY_TOKEN_AUDIENCES``   audiences ``/v1/token`` may issue for
 ``IDENTITY_AUDIENCE_BUNDLES_JSON``  ``{"<audience>": [members]}``: a token exchanged
                                for the key also carries every member (docs/PLATFORM-SERVICES-CUTOVER.md)
+``IDENTITY_BUNDLE_TOKEN_TTL_SECONDS``  lifetime of a bundle token, 60..600 (default 300; other tokens 600)
 ``IDENTITY_SERVICE_CLIENTS_JSON``  registered service clients (public keys only;
                                docs/SERVICE-CLIENTS.md)
 ``IDENTITY_DECIDE_MODE``       ``shadow`` (default: decide, record nothing) or
@@ -123,6 +124,8 @@ class Config:
     cell_audiences: frozenset[str] = frozenset()
     # IDENTITY_AUDIENCE_BUNDLES_JSON: an exchanged token for the key also carries every member (finance-api → cells).
     audience_bundles: Mapping[str, frozenset[str]] = field(default_factory=lambda: MappingProxyType({}))
+    # IDENTITY_BUNDLE_TOKEN_TTL_SECONDS: a bundle token opens every member, so it lives shorter (app.BUNDLE_TOKEN_TTL_*).
+    bundle_token_ttl: int = 300
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
@@ -176,6 +179,7 @@ class Config:
             if not minimum <= number <= maximum:
                 raise ConfigError(f'{name} is out of range')
             return number
+        bundle_ttl = integer("IDENTITY_BUNDLE_TOKEN_TTL_SECONDS", 300, 60, 600)
 
         rate_mode = env.get('IDENTITY_RATE_LIMIT_MODE','local').strip()
         if rate_mode not in ('local','postgres'):
@@ -240,6 +244,7 @@ class Config:
             token_audiences=audiences,
             cell_audiences=cells,
             audience_bundles=MappingProxyType(bundles),
+            bundle_token_ttl=bundle_ttl,
             decide_mode=mode,
             host=env.get("HOST", "0.0.0.0"),
             port=int(env.get("PORT", "8080")),
