@@ -179,6 +179,10 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         for name in (key, *bundles[key]):
             if name != PLATFORM_AUDIENCE:
                 paid_ceiling[name] = paid_ceiling.get(name, frozenset()) | ceiling
+    # Another bundle that carries a paid member would reach it around the ceiling: refuse that configuration.
+    for key, members in bundles.items():
+        if key not in paid_ceiling and any(m in paid_ceiling for m in members):
+            raise ValueError(f'bundle {key} carries a paid audience but has no entitlement ceiling')
     replays = ReplayCache(clock=clock)
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 

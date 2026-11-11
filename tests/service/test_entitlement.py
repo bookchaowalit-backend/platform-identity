@@ -177,6 +177,22 @@ class EntitlementTest(Helpers):
                 token_audiences=frozenset({"tasks-api"}), entitlement=ent)
 
 
+class OverlapTest(Helpers):
+    def test_another_bundle_with_a_paid_member_is_refused(self) -> None:
+        ent = Entitlement("enforce", {"finance-api": CEILING}, lambda ws: True)
+        with self.assertRaises(ValueError):
+            create_app(
+                connect=self.db.connect,
+                platform_verifier=TokenVerifier(StaticKey(self.platform_public), PLATFORM_ISSUER),
+                signing_key=SigningKey(self.signing_private), issuer=ISSUER,
+                google=GoogleVerifier(StaticKey(self.google_public), frozenset({GOOGLE_CLIENT})),
+                token_audiences=frozenset({"tasks-api", "transactions-api", "tax-api", "finance-api"}),
+                cell_audiences=frozenset({"transactions-api"}),
+                audience_bundles={"finance-api": frozenset({"transactions-api", "tax-api"}),
+                                  "tasks-api": frozenset({"transactions-api"})},
+                entitlement=ent)
+
+
 class FinanceLookupTest(Helpers):
     def test_asks_finance_api_with_a_short_self_signed_token(self) -> None:
         subject, ws, seen = uuid.uuid4(), uuid.uuid4(), []
