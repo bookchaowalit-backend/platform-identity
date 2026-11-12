@@ -6,14 +6,14 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 0.2 |
-| Status | **draft**: waiting for owner approval |
+| Spec ID / version | SPEC-006 / 0.3 |
+| Status | **in review**: checker R1 = revise (3 P1, 6 P2), addressed in 0.3; waiting for R2, then owner approval |
 | Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
-| Owner (maker) | Claude Code |
-| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context) |
+| Owner (maker) | Claude Code (session "Microservice SaaS integration adjustments") |
+| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise |
 | Approver | Owner (bookchaowalit) |
-| Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls on behalf of a tenant) |
-| Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, docs/PLATFORM-SERVICES-CUTOVER.md, platform-empire `0001_platform_core.sql`, `0008_identity_api_role.sql` |
+| Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls for a tenant) |
+| Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs; its author agreed 2026-11-12), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, platform-empire 0001/0002/0003/0008 |
 | Main-only | no: branch `spec/001-tenancy-delegation` → PR, merged locally |
 | Created / approved | 2026-11-11 / — |
 
@@ -21,289 +21,356 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 - **Problem:**
   1. The schema already supports many tenants (`platform.workspaces`, `memberships`, `roles`, `membership_roles`,
-     `delegations`), and every platform service already isolates rows by the token's `ws` claim with forced RLS.
-     But **nothing can create a tenant**. identity serves only `/v1/token` and `/v1/authz/decide`; workspaces,
-     members and grants are created by operator CLI (`empire_platform.cells grant --workspace owner`). The only
-     workspace in production is `owner`. A customer cannot sign up, invite a colleague or be removed.
-  2. **A service cannot call another service for a tenant.** `client_credentials` tokens carry one fixed
-     workspace per registered client (SERVICE-CLIENTS.md: "a second workspace needs a second client", max 32
-     clients). When commerce must call payment, then credits, then communication *for customer X*, there is no way
-     to get a token with `ws = X`. Forwarding the customer's own token fails because each service checks `aud`.
-  3. Token exchange does not check `workspaces.status`, so a suspended or closed workspace still gets tokens.
-- **Outcome:** a person signs in with Google, creates a workspace (or accepts an invitation) and receives tokens
-  for it. Admins manage members and roles through the API. A registered service exchanges the token it received
-  for a narrower token to the next service, with the same `sub` and `ws` and an `act` chain naming each hop. A
-  worker can get a token for any workspace that has installed it. Suspended or closed workspaces get no token.
-- **Why now:** this is the base for every other SaaS gap (per-workspace workers, plans and quotas, per-tenant
-  events). Without it there is only one customer.
+     `delegations`), and every platform service already isolates rows by the token's `ws` with forced RLS. But
+     **nothing can create a tenant**. identity serves only `/v1/token` and `/v1/authz/decide`; workspaces, members
+     and grants are made by operator CLI (`empire_platform.cells grant --workspace owner`). Production has one
+     workspace, `owner`.
+  2. **A service cannot call another service for a tenant.** A `client_credentials` token carries one fixed
+     workspace per client (max 32 clients). When commerce must call payment, then credits, then communication
+     *for customer X*, nothing issues a token with `ws = X`. Forwarding the customer's token fails on `aud`.
+  3. Token exchange does not check `workspaces.status`; a suspended or closed workspace still gets tokens.
+  4. Direct exchange signs canonical-permission scopes without calling `platform.authorize` (only shared scopes are
+     checked). Today that is harmless because each cell's PDP call decides, but a delegation built on "the subject
+     token's scope" would inherit it (R1 #1).
+- **Outcome:** a person signs in with Google, creates a workspace for a product (or accepts an invitation) and gets
+  tokens for it. Admins manage members and roles through the API. An installed service exchanges a token it
+  received for a narrower token to the next service in the same workspace, carrying who started the call. A worker
+  gets a token for any workspace that installed it. Suspended or closed workspaces get no token.
+- **Why now:** this is the base for the other SaaS gaps (per-workspace workers, plans and quotas, events per tenant).
 
 ### Decisions
 
-- **D1: identity owns the tenancy API; platform-empire owns the schema.** Writes go through new
-  `SECURITY DEFINER` functions in migration 0009, and `identity_api` gets `EXECUTE` on those functions only, still
-  with no table write grant. This keeps 0008's rule: the runtime role cannot change tables directly.
-- **D2: no new user store.** People stay `platform.identities` (kind `human`, `external_subject` = Google `sub`).
-  Google is still the only provider. Tokens keep the current shape (`iss`, `aud`, `sub`, `ws`, `scope`,
-  `exp` ≤ 600 s), so **no downstream service needs a change** to accept them.
-- **D3: delegation is RFC 8693 token exchange with an actor.** A service client authenticates as today
-  (`private_key_jwt`) and sends `subject_token` = an access token this identity issued. The new token can only
-  **narrow**: it keeps the subject's `sub` and `ws`, never outlives the subject token, and its scopes are inside
-  both the client's registered delegable scopes and what the subject may do.
-- **D4: multi-workspace workers need an installation.** A client registered with `"workspace": "*"` may get a
-  token for workspace W only if its service-account identity is an active member of W. Signup installs the clients
-  listed in `IDENTITY_DEFAULT_INSTALLS`. Removing that membership uninstalls the client.
-- **D6: sign-up is per product (absorbs finance-api PHASE-6-SAAS.md).** `POST /v1/signup` names a `product`
-  (e.g. `finance`). One workspace per (identity, product); a repeat returns the same workspace. The product decides
-  the role templates and default installs. `IDENTITY_SIGNUP_PRODUCTS` lists the products open for sign-up and is
-  the kill switch (empty = sign-up off).
-- **D7: delegation keeps every existing gate.** A delegated token for a paid audience (SPEC-005) gets the same
-  entitlement ceiling as a direct exchange, and a bundle subject token (aud list) delegates only from a member it
-  lists. Services may refuse money-moving actions for tokens with `act` (finance-api already does).
-- **D5: invitations are bound to a verified email and returned to the caller.** The invite code is shown once and
-  stored only as an HMAC. Sending it by email through communication-api is a follow-up spec.
+- **D1 — identity owns the API; platform-empire owns the schema.** Writes go through `SECURITY DEFINER` functions in
+  migration 0009. They are owned by a new NOLOGIN role `platform_tenancy` with `BYPASSRLS` and only the table grants
+  the functions need. Each function: `SET search_path = platform, pg_temp`; `REVOKE EXECUTE … FROM PUBLIC`;
+  `GRANT EXECUTE … TO identity_api` only; it takes the caller's identity and workspace as parameters that identity
+  fills **only from a verified token** (never from the request body or path); it sets `app.workspace_id` to that
+  workspace itself before touching tenant rows; it writes its audit event in the same transaction. `identity_api`
+  keeps no table write grant (0008's rule).
+- **D2 — no new user store.** People stay `platform.identities` (kind `human`, `external_subject` = Google `sub`).
+  Google is still the only provider.
+- **D3 — delegation follows the platform's existing claim meaning, not a new one.** In this platform `sub` is the
+  identity *performing* the call and `act.sub` is the identity that *initiated* it (`auth.py`: `initiated_by`;
+  `check_execution` requires the initiator to be an active member). So a delegated token is
+  `{sub: <service account>, ws: W, act: {sub: <initiator>}, via: [<client ids>]}`. Downstream PDP checks then run
+  for the installed service account in W, and the initiator must still be an active member of W. Services that
+  refuse delegated tokens (finance-api: `delegated_token_refused` for `del`/`obo`/`act`) keep refusing them, because
+  `act` is always present.
+- **D4 — an installation is a membership of the service account.** A client registered with `"workspace": "*"` (or
+  any client used for delegation) has a `platform.identities` row (kind `service_account`, id = its registered
+  `subject`). It is *installed* in W when that identity is an active member of W with the role `installation:<client_id>`,
+  created from the product's installation template (a fixed permission list, never edited through the members API).
+  Signup installs the product's default clients. Uninstall = remove that membership.
+- **D5 — invitations are bound to a verified email and returned to the caller once.** Stored as HMACs only. Email
+  delivery through communication-api is a follow-up spec.
+- **D6 — sign-up is per product (absorbs finance-api PHASE-6-SAAS.md).** `POST /v1/signup` names a `product`. One
+  workspace per (identity, product); a repeat returns it. The product fixes role and installation templates.
+  `IDENTITY_SIGNUP_PRODUCTS` is the kill switch (empty = off, the default).
+- **D7 — delegation keeps every existing gate.** Paid-audience ceilings (SPEC-005) apply to delegated tokens; a
+  delegated token is never a bundle token; `identity-api` is never a delegation target.
 
 ## 2. Scope
 
 | In scope | Out of scope (non-goals) |
 |---|---|
-| Signup: Google id_token → identity + workspace + owner membership + default roles + default installs | Other login providers (email/password, LINE, SAML/SSO) |
-| List my workspaces | UI / web frontend for signup and members |
-| Invitations: create, accept, revoke | Sending invitation emails (communication-api follow-up) |
-| Members: list, change roles, suspend, remove; last owner protected | Plans, quotas, billing per workspace (separate spec: gap item 6) |
-| Workspace: rename, suspend, close (owner only) | Data export and delete per workspace (gap item 8) |
-| Token exchange refuses non-active workspaces | Changing the 8 platform services (tokens keep their shape) |
-| Delegated token exchange (service → service, `act` chain) | Caller library for delegation in platform-backend-core (follow-up; services use plain HTTP until then) |
-| `"workspace": "*"` service clients + installation check | Per-workspace worker fan-out in communication/media/data/credits (gap item 2, uses AC-15/AC-16) |
-| Service read of active workspaces for installed clients | Workspace domain events on Kafka (later: outbox in 0009 is not built here) |
-| Audit row for every tenancy change | Moving the owner workspace or existing grants |
+| Signup per product: identity + workspace + owner membership + role templates + default installations | Other login providers (email/password, LINE, SAML) |
+| List my workspaces | Signup / members UI |
+| Invitations: create, list, revoke, accept | Sending invitation emails (communication-api follow-up) |
+| Members: list, change roles, suspend, reactivate, remove; owner role humans only; last owner protected | Plans, quotas, billing per workspace (finance-api SPEC-005 covers finance; generic = gap item 6) |
+| Workspace: rename, suspend, reactivate, close (owner only) | PDPA export/delete per workspace (gap item 8) |
+| Exchange refuses non-active workspaces and non-active identities | Changing the 8 platform services |
+| Direct exchange authorizes canonical scopes too (closes R1 #1 for both paths) | Caller library for delegation in platform-backend-core (follow-up) |
+| Delegated exchange for installed service clients | Worker fan-out in communication/media/data/credits (gap item 2; uses AC-20/AC-21) |
+| `"workspace": "*"` clients + installation check | Workspace domain events on Kafka |
+| Installations read for service clients | Shared replay store and limits across replicas (docs/SPEC-SHARED-REPLAY-AND-LIMITS.md) |
 
 ## 3. Behaviour — scenarios
 
-Common rules: every tenancy request is rate-limited like `/v1/token`, answers use the same error body
-(`{"error", "error_description"}`), responses carry `Cache-Control: no-store`, and nothing leaks whether an
-email, subject or workspace exists outside the caller's own workspace. Admin endpoints take an identity access
-token with `aud = identity-api`. Its `ws` is the workspace acted on, and it never comes from the URL or the body.
+Common rules (each has its own test in `tests/service/test_tenancy_common.py`):
+- **R-a** every tenancy endpoint uses the `/v1/token` per-address limiter, and `POST /v1/signup` also a global
+  limit `IDENTITY_SIGNUP_PER_HOUR` (default 20);
+- **R-b** errors use `{"error", "error_description"}` and `Cache-Control: no-store`;
+- **R-c** admin endpoints take an access token issued by this identity with `aud` containing `identity-api`,
+  verified by a second verifier for identity's own issuer and key (not the platform verifier); its `ws` is the
+  workspace acted on;
+- **R-d** every admin call re-checks in the database that the caller is an active identity with an active membership
+  in an active W and holds the permission now (a removed admin's 600 s token stops working at once);
+- **R-e** no answer reveals whether an email, Google subject, workspace or invitation exists outside the caller's own
+  workspace; the "not found / not allowed / wrong" outcomes of one endpoint share one status and body.
+
+Permissions used (canonical, so they pass the `platform.permission` domain): `identity.member:read`,
+`identity.member:admin`, `identity.workspace:admin`, `identity.installation:read`.
 
 ### Tenant lifecycle
 
 ### AC-01 — Sign up creates a workspace
 
-- **Given** `finance` in `IDENTITY_SIGNUP_PRODUCTS`, `IDENTITY_SIGNUP_MODE=open` and a valid Google id_token (`email_verified = true`) whose subject has no identity
-- **When** `POST /v1/signup` with `{id_token, product, slug, name}`
-- **Then** 201 with `{workspace_id, slug, identity_id}`
-- **And** one `identities` row (kind `human`), one `workspaces` row (status `active`, `owner_identity_id` = the identity),
-  one active membership, roles `owner`/`admin`/`member` created from the product's entry in `IDENTITY_ROLE_TEMPLATES_JSON`, `owner`
-  assigned, a membership for each client in the product's `IDENTITY_DEFAULT_INSTALLS` entry, and one audit event `workspace.created`
-- **Test:** `runtime_tests/test_tenancy.py::test_signup_creates_workspace_owner_roles_and_installs` · integration
+- **Given** `finance` in `IDENTITY_SIGNUP_PRODUCTS`, `IDENTITY_SIGNUP_MODE=open`, and a valid Google id_token with
+  `email_verified = true` whose subject has no identity
+- **When** `POST /v1/signup` `{id_token, product: "finance", slug, name}`
+- **Then** 201 `{workspace_id, slug, identity_id, created: true}`
+- **Test:** `runtime_tests/test_tenancy.py::test_signup_creates_workspace` · integration
 
-### AC-02 — Signup modes
+### AC-02 — Signup writes the full tenant in one transaction
 
-- **Given** `IDENTITY_SIGNUP_MODE` is `closed` (the default), or `invite_code` with codes in `IDENTITY_SIGNUP_CODES_SHA256`
-- **When** signup is called without a matching code (`invite_code`), at all (`closed`), or for a product not in
-  `IDENTITY_SIGNUP_PRODUCTS`
-- **Then** 403 `signup_closed` and nothing is written. With a matching code in `invite_code` mode it behaves like AC-01
-- **Test:** `tests/service/test_tenancy.py::test_signup_modes` · unit
+- **Given** AC-01
+- **Then** exactly: one `identities` row (human, active); one `workspaces` row (active, owner = that identity,
+  `product = finance`); an active membership; roles `owner`, `admin`, `member` with the product template's permissions;
+  `owner` assigned; one installation membership + role per client in the product's `IDENTITY_DEFAULT_INSTALLS`;
+  audit `workspace.created`. A failure in any step leaves no row
+- **Test:** `runtime_tests/test_tenancy.py::test_signup_rows_and_atomicity` · integration
 
-### AC-03 — Signup limits and idempotency
+### AC-03 — Signup gates
 
-- **Given** an identity that already owns `IDENTITY_MAX_OWNED_WORKSPACES` workspaces (default 3)
-- **When** it signs up again
-- **Then** 409 `workspace_limit`. A taken slug → 409 `slug_taken`. A repeat for the same (subject, product) → 200 with
-  the existing workspace and no new rows, whatever slug is sent
-- **Test:** `runtime_tests/test_tenancy.py::test_signup_limit_slug_and_replay` · integration
+- **When** the product is not in `IDENTITY_SIGNUP_PRODUCTS`, or the mode is `closed` (default), or the mode is
+  `invite_code` and the code's SHA-256 is not in `IDENTITY_SIGNUP_CODES_SHA256` (constant-time compare), or the
+  id_token's email is not verified
+- **Then** 403 `signup_closed` (unverified email: 400 `invalid_grant`), nothing written
+- **Test:** `tests/service/test_tenancy.py::test_signup_gates` · unit
 
-### AC-04 — List my workspaces
+### AC-04 — Signup idempotency per (subject, product)
 
-- **Given** a person who is an active member of workspaces A and B, and suspended in C
-- **When** `POST /v1/me/workspaces` with `{id_token}` (POST so the id_token never appears in a URL)
-- **Then** 200 with A and B only, each `{workspace_id, slug, name, status, roles}`. A closed workspace is not listed
-- **Test:** `runtime_tests/test_tenancy.py::test_list_my_workspaces_only_active_memberships` · integration
+- **Given** the subject already has a workspace for `finance`
+- **When** it signs up again for `finance`, with any slug
+- **Then** 200 `{workspace_id, slug, identity_id, created: false}` with the existing workspace's slug; no row added.
+  Key = (`subject_hmac`, `product`), unique in `platform.signups`
+- **Test:** `runtime_tests/test_tenancy.py::test_signup_replay_returns_existing` · integration
 
-### AC-05 — Create an invitation
+### AC-05 — Signup conflicts and limits
 
-- **Given** a caller token for workspace W with permission `identity.member:admin`
-- **When** `POST /v1/invitations` with `{email, role}` where `role` is a role of W other than `owner`
-- **Then** 201 `{invitation_id, code, expires_at}` (7 days). `code` is returned only here; the DB stores
-  HMAC(`IDENTITY_INVITE_KEY`, code) and HMAC of the lower-cased email, never either in clear. Audit `member.invited`
-- **And** a caller without the permission → 403. `role = owner` → 400 `invalid_role`
-- **Test:** `runtime_tests/test_tenancy.py::test_invitation_create_stores_only_hashes` · integration
+- **When** the slug is taken → 409 `slug_taken`. Two concurrent signups with the same new slug → one 201, one 409.
+  The subject already owns `IDENTITY_MAX_OWNED_WORKSPACES` (default 3) → 409 `workspace_limit`. Global hourly limit
+  reached → 429 `slow_down`
+- **Test:** `runtime_tests/test_tenancy.py::test_signup_conflicts_and_limits` · integration
 
-### AC-06 — Accept an invitation
+### AC-06 — List my workspaces
+
+- **Given** a person active in A and B, suspended in C, and active in a closed D
+- **When** `POST /v1/me/workspaces` `{id_token}`
+- **Then** 200 with A and B only, each `{workspace_id, slug, name, product, status, roles}`. An invalid id_token →
+  400 `invalid_grant`. An unknown subject → 200 with an empty list (same shape as a member of nothing)
+- **Test:** `runtime_tests/test_tenancy.py::test_list_my_workspaces` · integration
+
+### AC-07 — Create and list invitations
+
+- **Given** an admin token for W (`identity.member:admin`)
+- **When** `POST /v1/invitations` `{email, role}`, `role` ∈ W's `admin` or `member`
+- **Then** 201 `{invitation_id, code, expires_at}` (7 days). `code` = 32 random bytes, base64url, shown only here.
+  Stored: HMAC-SHA256(`IDENTITY_INVITE_KEY`, code) and HMAC-SHA256(`IDENTITY_INVITE_KEY`, lower-cased email). Audit
+  `member.invited`. `GET /v1/invitations` lists W's open invitations without code or email (only a 4-char email hint
+  stored at creation, e.g. `an…@e…`)
+- **And** `role = owner` or an `installation:*` role → 400 `invalid_role`; the email already belongs to an active
+  member of W → 201 anyway (no membership oracle) and acceptance becomes a no-op success
+- **Test:** `runtime_tests/test_tenancy.py::test_invitation_create_and_list` · integration
+
+### AC-08 — Accept an invitation, once
 
 - **Given** an open invitation to W for `ann@example.com`
-- **When** `POST /v1/invitations/accept` with `{id_token, code}`, the id_token's verified email is that address
-- **Then** 200 `{workspace_id}`. The identity is created if missing, the membership is active with the invited
-  role, the invitation becomes `accepted`, and audit `member.joined` is written
-- **And** wrong email, an unverified email, an expired, revoked or used code all → the same 400 `invalid_grant`
-- **Test:** `runtime_tests/test_tenancy.py::test_accept_invitation_binds_verified_email` · integration
+- **When** `POST /v1/invitations/accept` `{id_token, code}` and the id_token's verified email is that address
+- **Then** 200 `{workspace_id}`; identity created if missing; membership active with the invited role; the
+  invitation moves `open → accepted` with `UPDATE … WHERE status = 'open' AND expires_at > now() RETURNING` so two
+  concurrent accepts give one success; audit `member.joined`
+- **And** wrong email, unverified email, unknown, expired, revoked or used code, or W not active → the same 400
+  `invalid_grant`, after the same work (HMAC + one indexed lookup) so timing does not separate them
+- **Test:** `runtime_tests/test_tenancy.py::test_accept_invitation_once` · integration
 
-### AC-07 — Members: list and change
+### AC-09 — Revoke an invitation
+
+- **When** an admin `DELETE /v1/invitations/{id}` for an open invitation of W → 204, status `revoked`, audit.
+  An id of another workspace or an unknown id → 404
+- **Test:** `runtime_tests/test_tenancy.py::test_revoke_invitation` · integration
+
+### AC-10 — Members: list and change
 
 - **Given** an admin token for W
-- **When** `GET /v1/members`, then `PATCH /v1/members/{identity_id}` with `{roles?, status?}` (`active`/`suspended`),
-  or `DELETE /v1/members/{identity_id}`
-- **Then** the list shows only W's members. A change replaces that member's roles or status and writes one audit
-  event. A suspended member's next token exchange for W → 400 `invalid_grant`
+- **When** `GET /v1/members` (`identity.member:read`), `PATCH /v1/members/{identity_id}` `{roles?, status?}`
+  (`active`/`suspended`), `DELETE /v1/members/{identity_id}`
+- **Then** the list holds only W's members with `{identity_id, kind, display_name, status, roles}`; a change replaces
+  roles or status and writes one audit event. A suspended member's next exchange for W → 400 `invalid_grant`;
+  reactivating restores it
+- **And** for a `service_account` member, PATCH → 400 `installation_fixed`; DELETE = uninstall (allowed)
 - **Test:** `runtime_tests/test_tenancy.py::test_members_list_patch_delete` · integration
 
-### AC-08 — The last owner is protected
+### AC-11 — Owner role and last owner
 
-- **Given** W has exactly one active member with role `owner`
-- **When** that member is demoted, suspended or removed (by anyone)
-- **Then** 409 `last_owner` and nothing changes. Only an owner may grant or remove the `owner` role
-- **Test:** `runtime_tests/test_tenancy.py::test_last_owner_cannot_be_removed` · integration
+- **Then** only an active owner may grant or remove `owner`; `owner` may only be held by an active `human`
+  member. Demoting, suspending or removing the last active human owner → 409 `last_owner`. The function locks W's
+  owner rows (`SELECT … FOR UPDATE`) first, so two concurrent demotions of two owners leave at least one
+- **Test:** `runtime_tests/test_tenancy.py::test_owner_rules_and_concurrent_demotion` · integration
 
-### AC-09 — Workspace settings and status
+### AC-12 — Workspace settings and status
 
-- **Given** an owner token for W
-- **When** `PATCH /v1/workspace` with `{name?}` or `{status: suspended | active | closed}`
-- **Then** 200. `closed` is final (later PATCH → 409). A non-owner → 403. Audit `workspace.updated`
-- **Test:** `runtime_tests/test_tenancy.py::test_workspace_patch_owner_only_closed_is_final` · integration
+- **Given** an owner token for W (`identity.workspace:admin`, held only by `owner`)
+- **When** `PATCH /v1/workspace` `{name?}` or `{status: suspended | active | closed}`
+- **Then** 200; `closed` is final (any later PATCH → 409 `workspace_closed`); a non-owner → 403; audit
+  `workspace.updated`. A suspended W can only be reactivated by its owner through a token, so the owner's exchange
+  for a suspended W is allowed with `identity.workspace:admin` alone (no other scope)
+- **Test:** `runtime_tests/test_tenancy.py::test_workspace_patch_status` · integration
 
-### AC-10 — No tokens for a non-active workspace
+### AC-13 — No tokens for a non-active workspace or identity
 
-- **Given** W is `suspended` or `closed`
-- **When** a member exchanges a Google id_token for W, or any service client asks for a W token (AC-12, AC-15)
-- **Then** 400 `invalid_grant`, the same body as for a non-member
-- **Test:** `runtime_tests/test_tenancy.py::test_token_refused_for_inactive_workspace` · integration
+- **Given** W suspended or closed, or the identity disabled
+- **When** a member exchanges a Google id_token for W (except AC-12's owner case), or any client asks for a W
+  token (AC-16, AC-20)
+- **Then** 400 `invalid_grant`, the same body as a non-member
+- **Test:** `runtime_tests/test_tenancy.py::test_token_refused_inactive` · integration
 
-### AC-11 — Cross-workspace isolation
+### AC-14 — Cross-workspace isolation
 
 - **Given** an admin token for W1
-- **When** it reads, patches or deletes a member, invitation or setting of W2, using W2 ids in the path
-- **Then** 404, identical to an unknown id. No W2 row changes
-- **Test:** `runtime_tests/test_tenancy.py::test_admin_cannot_touch_other_workspace` · integration
+- **When** it reads or changes a member, invitation or setting of W2 using W2 ids
+- **Then** 404, as for an unknown id; no W2 row changes. Every tenancy function called with `app.workspace_id`
+  unset or a workspace argument that differs from the token's → error, nothing written
+- **Test:** `runtime_tests/test_tenancy.py::test_isolation_and_fail_closed` · integration
+
+### AC-15 — Direct exchange authorizes every requested scope
+
+- **Given** a member whose roles do not include `payments.intent:write`
+- **When** it exchanges with `scope = payments.intent:write`
+- **Then** 403 `invalid_scope` (today it is signed). Allowed canonical and shared scopes still work; more than 32
+  scopes → 400. A request with no `scope` still yields a scope-less token, as today
+- **Test:** `runtime_tests/test_tenancy.py::test_direct_exchange_authorizes_canonical_scopes` · integration
 
 ### Delegated service tokens
 
-### AC-12 — Delegate on behalf of the caller
+Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity from starting):
+`workspace` may be `"*"`; new optional `delegate_from` (one audience, and no two clients may share it),
+`delegable_scopes` (⊆ `scopes`), `products` (where it may be installed). A delegation target may not be
+`identity-api` or a bundle audience.
 
-- **Given** service client `commerce-api`, registered with `delegate_from: "commerce-api"`,
-  `audiences ⊇ {payment-api}` and `delegable_scopes ⊇ {payments:write}`, and a person token
-  `{sub: P, ws: W, aud: commerce-api, scope: "orders:write payments:write"}` issued by this identity
-- **When** the client calls `/v1/token` with `grant_type` = token-exchange, `subject_token` = that token,
-  `subject_token_type` = access_token, `audience = payment-api`, `scope = payments:write`, and its client assertion
-- **And** when the subject token is a bundle token (`aud` is a list), `delegate_from` must be one of its members
-- **Then** 200 with a token `{sub: P, ws: W, aud: payment-api, scope: "payments:write",
-  act: {sub: <commerce subject>, client_id: "commerce-api"}}`, and `exp` = min(now + 600, subject `exp`)
-- **Test:** `tests/service/test_delegation.py::test_delegated_token_keeps_subject_and_workspace` · unit
+### AC-16 — Delegate on behalf of the initiator
 
-### AC-13 — Delegation can only narrow
+- **Given** client `commerce-api` (`delegate_from: commerce-api`, `audiences ⊇ {payment-api}`,
+  `delegable_scopes ⊇ {payments.intent:write}`) installed in W, and a subject token issued by this identity
+  `{sub: P, ws: W, aud: [commerce-api, platform-api], scope: "commerce.order:write payments.intent:write"}`
+- **When** the client calls `/v1/token` with the token-exchange grant, `subject_token_type` = access_token,
+  `audience = payment-api`, `scope = payments.intent:write`, and its client assertion
+- **Then** 200 with `{sub: <commerce-api subject>, ws: W, aud: [payment-api, platform-api] (cell audience) or
+  payment-api, scope: "payments.intent:write", act: {sub: P}, via: ["commerce-api"]}` and `exp` = min(now + 600,
+  subject `exp`); a bundle subject token (300 s) therefore yields ≤ 300 s
+- **Test:** `tests/service/test_delegation.py::test_delegated_token_claims` · unit
 
-- **Given** the setup of AC-12
-- **When** the requested scope is not in the subject token's scope, or not in the client's `delegable_scopes`; or the
-  subject token's `aud` is not the client's `delegate_from`; or the audience is not registered for the client
-- **Then** 400 `invalid_scope` / `invalid_grant` / `invalid_target` and no token. A subject token from another
-  issuer, expired, or with a bad signature → 400 `invalid_grant`
-- **And** a requested audience in `IDENTITY_ENTITLEMENT_CEILINGS_JSON` (or a member of such a bundle) gets the
-  same scope ceiling as a direct exchange when the workspace has no current pass (SPEC-005); delegating to a bundle
-  audience is refused (`invalid_target`), so a delegated token is always single-audience
-- **Test:** `tests/service/test_delegation.py::test_delegation_never_widens` · unit
+### AC-17 — Delegation only narrows
 
-### AC-14 — Chains are bounded and still authorized
+- **Then** refused, with no token, when: a requested scope is missing from the subject token's `scope`; the subject
+  token has **no** `scope` (unrestricted tokens cannot be delegated → 400 `invalid_scope`); a scope is outside
+  `delegable_scopes`; `platform.authorize` does not allow it for the service account in W; `delegate_from` is not in
+  the subject `aud`; the target is not in `audiences`, is `identity-api` or a bundle → `invalid_target`; the subject
+  token is from another issuer, expired, badly signed, or itself a `client_credentials` token of a fixed-workspace
+  client → `invalid_grant`
+- **Test:** `tests/service/test_delegation.py::test_delegation_never_widens` (one sub-test per refusal) · unit + integration
 
-- **Given** a subject token that already has `act` (one earlier hop)
-- **When** the next service delegates again
-- **Then** the new `act` nests the previous one (`act.act`). A chain deeper than 3 hops → 400 `invalid_grant`
-- **And** when the subject is a person, identity checks again that P is an active member of an active W (AC-10),
-  and that each shared scope is allowed by `platform.authorize`, so removing a member stops the whole chain within
-  one token lifetime
-- **Test:** `runtime_tests/test_delegation.py::test_chain_depth_and_membership_rechecked` · integration
+### AC-18 — Chains, re-checks and paid audiences
 
-### AC-15 — Multi-workspace worker token
+- **Given** a subject token that is itself delegated (`via` has 1 entry)
+- **Then** the next hop keeps `act.sub` = the original initiator and appends to `via`; `via` may hold at most 3
+  client ids, a 4th hop → 400 `invalid_grant`. Every hop re-checks: the initiator is an active identity and active
+  member of active W; the calling service account is installed in W; each scope is authorized for it. A target in
+  `IDENTITY_ENTITLEMENT_CEILINGS_JSON` (or a member of such a bundle) gets SPEC-005's ceiling when W has no
+  current pass
+- **And** uninstalling the client or removing the initiator makes the next hop fail; existing hop tokens die at
+  `exp` (≤ 600 s; tested with a fake clock)
+- **Test:** `runtime_tests/test_delegation.py::test_chain_recheck_and_ceiling` · integration
 
-- **Given** client `communication-worker` registered with `"workspace": "*"`, and its subject is a
-  `service_account` identity that is an active member of W1 but not of W2
-- **When** it calls `client_credentials` with `workspace = W1`, and then with `workspace = W2`
-- **Then** W1 → 200 with `ws = W1`. W2 → 400 `invalid_grant`. Without `workspace` → 400 `invalid_request`.
-  A fixed-workspace client keeps today's behaviour and ignores nothing: sending a different `workspace` → 400
+### AC-19 — Downstream sees a normal token
+
+- **When** a delegated token from AC-16 is sent to `POST /v1/authz/decide` (record and shadow) for a permission
+  the installation role holds
+- **Then** `allow`, with `initiated_by = P` and `executed_by` = the service account; for a permission it lacks, `deny`
+- **Test:** `runtime_tests/test_delegation.py::test_delegated_token_passes_platform_pdp` · integration
+
+### AC-20 — Multi-workspace worker token
+
+- **Given** `communication-worker` registered with `"workspace": "*"`, installed in W1, not in W2
+- **When** `client_credentials` with `workspace = W1`, then `W2`, then none
+- **Then** W1 → 200 `ws = W1` (scopes ≤ registry `scopes` and authorized for it in W1); W2 → 400 `invalid_grant`;
+  none → 400 `invalid_request`
 - **Test:** `runtime_tests/test_delegation.py::test_star_client_needs_installation` · integration
 
-### AC-16 — Worker lists the workspaces that installed it
+### AC-21 — List my installations
 
-- **Given** the client of AC-15 with a token for audience `identity-api` and scope `identity.installation:read`
-- **When** `GET /v1/service/installations?after=<cursor>`
-- **Then** 200 with the active workspace ids where its own identity is an active member, 500 per page,
-  ordered by id. It never lists other clients' installations
-- **Test:** `runtime_tests/test_delegation.py::test_installations_list_is_own_and_paged` · integration
+- **Given** the client of AC-20 with a token `aud identity-api`, scope `identity.installation:read`
+- **When** `GET /v1/service/installations?after=<workspace uuid>&limit=500`
+- **Then** 200 `{workspaces: [ids ordered ascending], next: <last id> | null}` for active W where its own identity
+  (`sub`) is installed; an `after` that is not a UUID → 400 `invalid_request`
+- **Test:** `runtime_tests/test_delegation.py::test_installations_paged_and_own` · integration
 
-### AC-17 — Backward compatibility
+### AC-22 — Backward compatibility
 
-- **Given** today's registry (fixed-workspace clients, no `delegate_from`) and today's person token exchange
-- **When** the existing test suite runs, and existing clients call `/v1/token`
-- **Then** every existing test passes unchanged and the issued claims are identical (`act` only appears on delegated tokens)
-- **Test:** `tests/service/test_app.py`, `tests/service/test_service_clients.py` (unchanged) · unit
+- **Then** existing registries (fixed workspace, no new keys) parse unchanged; person exchange, bundle and
+  paid-audience behaviour and existing tests pass unchanged except AC-15's refusal of unauthorized canonical
+  scopes, which is listed as the one intended change (owner risk 7)
+- **And** a fixed-workspace client that now also sends `workspace`: equal to its own → accepted; different → 400
+  `invalid_request` (today the field is ignored; no current caller sends it — checked in the 5 caller repos before deploy)
+- **Test:** `tests/service/test_app.py`, `tests/service/test_service_clients.py` + `test_registry_new_keys` · unit
 
 ## 4. Interfaces and data
 
 | Interface | Change | Contract |
 |---|---|---|
-| `POST /v1/signup` | new | body `{id_token, slug, name, code?}` → 201/200 `{workspace_id, slug, identity_id}`; 400/403/409 |
-| `POST /v1/me/workspaces` | new | body `{id_token}` → 200 `{workspaces: [...]}` |
-| `POST /v1/invitations` · `DELETE /v1/invitations/{id}` · `GET /v1/invitations` | new | bearer `aud=identity-api`, `identity.member:admin` |
-| `POST /v1/invitations/accept` | new | body `{id_token, code}` → 200 `{workspace_id}` |
-| `GET /v1/members` · `PATCH`/`DELETE /v1/members/{identity_id}` | new | `identity.member:read` / `identity.member:admin` |
-| `PATCH /v1/workspace` | new | `identity.workspace:admin` (owner role only) |
-| `GET /v1/service/installations` | new | service token, `identity.installation:read` |
-| `POST /v1/token` token-exchange with `subject_token_type=access_token` + client assertion | new | AC-12..AC-14 |
-| `POST /v1/token` `client_credentials` + `workspace` | changed | only for `"workspace": "*"` clients (AC-15) |
-| `POST /v1/signup` product list, role templates, installs | new | `IDENTITY_SIGNUP_PRODUCTS` (kill switch), `IDENTITY_ROLE_TEMPLATES_JSON` and `IDENTITY_DEFAULT_INSTALLS` keyed by product |
-| `IDENTITY_SERVICE_CLIENTS_JSON` | changed | optional `delegate_from`, `delegable_scopes`; `workspace` may be `"*"` |
-| New env | new | `IDENTITY_SIGNUP_MODE`, `IDENTITY_SIGNUP_CODES_SHA256`, `IDENTITY_MAX_OWNED_WORKSPACES`, `IDENTITY_ROLE_TEMPLATES_JSON`, `IDENTITY_DEFAULT_INSTALLS`, `IDENTITY_INVITE_KEY` (secret) |
-| identity's own audience `identity-api` | new | added to `IDENTITY_TOKEN_AUDIENCES`; identity verifies its own tokens with its own key |
+| `POST /v1/signup` | new | `{id_token, product, slug, name, code?}` → 201/200 `{workspace_id, slug, identity_id, created}` |
+| `POST /v1/me/workspaces` | new | `{id_token}` → 200 `{workspaces: [...]}` |
+| `POST`, `GET /v1/invitations`; `DELETE /v1/invitations/{id}` | new | `identity.member:admin` |
+| `POST /v1/invitations/accept` | new | `{id_token, code}` → 200 `{workspace_id}` |
+| `GET /v1/members`; `PATCH`, `DELETE /v1/members/{identity_id}` | new | `identity.member:read` / `:admin` |
+| `PATCH /v1/workspace` | new | `identity.workspace:admin` |
+| `GET /v1/service/installations` | new | `identity.installation:read` |
+| `POST /v1/token`: token exchange, `subject_token_type=access_token` + client assertion | new | AC-16..AC-19 |
+| `POST /v1/token`: `client_credentials` + `workspace` | changed | AC-20, AC-22 |
+| `POST /v1/token`: direct exchange | changed | AC-13, AC-15 |
+| Env | new | `IDENTITY_SIGNUP_PRODUCTS`, `IDENTITY_SIGNUP_MODE`, `IDENTITY_SIGNUP_CODES_SHA256`, `IDENTITY_SIGNUP_PER_HOUR`, `IDENTITY_MAX_OWNED_WORKSPACES`, `IDENTITY_ROLE_TEMPLATES_JSON` and `IDENTITY_DEFAULT_INSTALLS` (keyed by product), `IDENTITY_INVITE_KEY` (secret, rotation: `IDENTITY_INVITE_KEY_PREVIOUS` is also tried on accept for 7 days) |
+| Audience `identity-api` | new | added to `IDENTITY_TOKEN_AUDIENCES`, not a cell audience, never a delegation target |
 
-- **Data model / migration (platform-empire `0009_tenancy.sql`, reversible by a down script):**
-  - `platform.invitations (id, workspace_id, email_hmac, code_hmac, role_id, status, expires_at, created_by, accepted_by, created_at)`
-    with forced RLS by workspace, like the other tables.
-  - `platform.signup_requests (subject_hmac, slug, workspace_id, created_at)` for AC-03 replay.
-  - `SECURITY DEFINER` functions, each `SET search_path = platform, pg_temp`, each writing its audit event:
-    `tenancy_signup`, `tenancy_my_workspaces`, `tenancy_invite`, `tenancy_revoke_invitation`, `tenancy_accept`,
-    `tenancy_set_member`, `tenancy_remove_member`, `tenancy_update_workspace`, `tenancy_installations`,
-    `tenancy_member_active` (used by AC-10/14/15).
-  - `GRANT EXECUTE` on those functions to `identity_api` only. No table grant changes. Permissions
-    `identity.member:read|admin`, `identity.workspace:admin`, `identity.installation:read` are canonical, so
-    they pass the `platform.permission` domain.
-- **Backward compatibility:** all current callers keep working (AC-17). The `owner` workspace and its grants are untouched.
-  Services need no change. Delegated tokens look like normal tokens to them, plus an `act` claim they may log.
+- **Migration 0009 (platform-empire, with a down script):** role `platform_tenancy` (NOLOGIN, BYPASSRLS);
+  `platform.workspaces.product text`; `platform.signups (subject_hmac, product, workspace_id, created_at,
+  PRIMARY KEY (subject_hmac, product))`; `platform.invitations (id, workspace_id, email_hmac, email_hint, code_hmac
+  UNIQUE, role_id, status, expires_at, created_by, accepted_by, created_at)` with forced RLS by workspace; the
+  functions `tenancy_signup`, `tenancy_my_workspaces`, `tenancy_invite`, `tenancy_list_invitations`,
+  `tenancy_revoke_invitation`, `tenancy_accept`, `tenancy_list_members`, `tenancy_set_member`,
+  `tenancy_remove_member`, `tenancy_update_workspace`, `tenancy_installations`, `tenancy_active` (AC-13/18/20 check)
+  per D1. A snapshot branch of the `empire` Neon project is taken before it runs.
+- **Backward compatibility:** AC-22. The `owner` workspace and its grants stay; `owner` workspace gets
+  `product = NULL`. Services need no change.
 
 ## 5. Non-functional requirements
 
 | NFR | Target | How it is tested |
 |---|---|---|
-| Performance | `/v1/token` delegated p95 < 150 ms warm (one DB round trip for person subjects, none for service subjects); tenancy endpoints < 300 ms warm | timing assertion in runtime tests; manual check after deploy |
-| Security / privacy | no email, code or Google subject stored in clear (HMAC); no existence oracle (AC-06, AC-10, AC-11); delegation only narrows (AC-13); chain ≤ 3 (AC-14); last owner protected (AC-08); runtime role still has no table writes | listed ACs + a test that `identity_api` cannot `INSERT` into `platform.memberships` |
-| Reliability / observability | one log line per tenancy change with ids only (no email); audit event per change; Sentry keeps the no-free-text rule | runtime tests assert the audit row; log assertion |
-| Accessibility / UX | N/A: API only, no UI in this spec | N/A |
+| Performance | delegated exchange p95 < 150 ms warm (one DB round trip: `tenancy_active` + authorize in one call); tenancy endpoints < 300 ms warm | timing assertion in runtime tests; check after deploy |
+| Security / privacy | HMAC only for email, code, subject; R-e no oracle; AC-17 narrowing; AC-18 chain ≤ 3 hops; AC-11 owner rules; `identity_api` still cannot `INSERT` into any `platform.*` table | listed ACs + `test_identity_api_has_no_table_writes` |
+| Reliability / observability | one log line per tenancy change with ids only; audit row per change; Sentry no-free-text rule kept | runtime tests assert audit rows; log assertion |
+| Accessibility / UX | N/A: API only | N/A |
 
 ## 6. Test plan (TDD)
 
-- **Test levels:** unit (`tests/service/`) for validation, registry parsing and claim building with a fake DB; integration
-  (`runtime_tests/`) against a throwaway `postgres:17-alpine` with platform-empire migrations 0001–0009 applied,
-  as the real `identity_api` role.
-- **Test data:** generated RSA keys, fake Google verifier, random UUIDs, `@example.com` addresses. No production data.
-- **Coverage:** keep the repository's current CI gate; this change must not lower it.
+- **Test levels:** unit (`tests/service/`) with fake DB and fake Google; integration (`runtime_tests/`) against a
+  throwaway `postgres:17-alpine` with platform-empire migrations 0001–0009, connecting as the real `identity_api` role.
+- **Test data:** generated RSA keys, random UUIDs, `@example.com` addresses. No production data.
+- **Coverage:** keep the repository's CI gate; this change must not lower it.
 - **Not test-first (exceptions):** none.
 
 ### Red / green log
 
 | Scenario | Test | Red | Green | Refactor note |
 |---|---|---|---|---|
-| AC-01 … AC-17 | see §3 | — | — | — |
+| AC-01 … AC-22, R-a … R-e | see §3 | — | — | — |
 
 ## 7. Risks and open questions
 
 | # | Risk or question | Impact | Owner | Resolution / date |
 |---|---|---|---|---|
 | 1 | Signup mode at launch: `closed`, `invite_code` (recommended) or `open`? | who can create a tenant | Owner | — |
-| 2 | Default role templates: which permissions do `admin` and `member` get for each product? Proposal: owner = all permissions in the workspace's granted cells, admin = all except `identity.workspace:admin`, member = the `:read`/`:write` permissions of product cells | what a new customer can do | Owner | — |
-| 3 | `IDENTITY_GOOGLE_CLIENT_IDS` is still unset, so no person token, signup or acceptance can work in production | blocks go-live, not build | Owner | — |
-| 4 | Migration 0009 runs on the `empire` Neon database shared with all life cells; deploying it needs the Railway approval gate | shared DB change | Claude + owner | snapshot branch before migrate |
-| 5 | The registry is capped at 32 clients; `"*"` clients remove the need for one client per workspace, so the cap stays | none expected | Claude | — |
-| 6 | Revocation is by expiry only (≤ 600 s); a removed member's chain lives at most that long | short exposure | Owner accepts or asks for a deny list | — |
+| 2 | Role templates per product. Proposal for `finance`: owner = the ten cells' read/write/delete + `finance-api` + the `identity.*` permissions; admin = owner minus `identity.workspace:admin`; member = cells' read/write | what a customer can do | Owner | — |
+| 3 | `IDENTITY_GOOGLE_CLIENT_IDS` still unset: no person token, signup or acceptance works in production | blocks go-live, not build | Owner | — |
+| 4 | Migration 0009 runs on the shared `empire` database; deploy goes through the Railway approval gate | shared DB change | Claude + owner | snapshot branch first |
+| 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | — |
+| 6 | Revocation is by expiry (≤ 600 s; admin calls re-check, R-d) | short exposure of downstream hop tokens | Owner accepts | — |
+| 7 | AC-15 makes direct exchange refuse canonical scopes the person lacks; a caller that asked for more than it holds would now get 403 | behaviour change | Owner | callers checked before deploy |
 
 ## 8. Change log
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-11-11 | First draft from the SaaS gap review (items 1 and 3) |
-| 0.2 | 2026-11-12 | Renumbered SPEC-006 (identity has SPEC-004/005); absorbed finance-api PHASE-6-SAAS.md per-product sign-up (D6); bundle and paid-audience rules for delegation (D7) |
+| 0.2 | 2026-11-12 | Renumbered SPEC-006; absorbed finance-api per-product sign-up (D6); bundle and paid-audience rules (D7) |
+| 0.3 | 2026-11-12 | R1 fixes: D1 owner role + fail-closed functions; D3 claim meaning aligned with `auth.py` (`sub` = service account, `act.sub` = initiator, `via` chain); D4 installation = templated membership; AC-15 authorize every scope; scope-less tokens not delegable; R-a..R-e; atomic accept, owner locking, signup key; split ACs; new scenarios (concurrent slug, reactivate, expired code, existing member, uninstall mid-chain, PDP pass-through) |
