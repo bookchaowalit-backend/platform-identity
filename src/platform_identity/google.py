@@ -8,6 +8,7 @@ is never used as an identifier because it can change hands.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import jwt
 
@@ -31,6 +32,10 @@ class GoogleVerifier:
 
     def external_subject(self, id_token: str) -> str:
         """``google:<sub>`` for a valid id_token issued to one of our clients."""
+        return self.person(id_token).subject
+
+    def person(self, id_token: str) -> Person:
+        """The verified person: subject, and the email only when Google says it is verified (SPEC-006 invitations)."""
         if not self.client_ids:
             raise InvalidIdToken("no Google client is configured")
         try:
@@ -43,4 +48,24 @@ class GoogleVerifier:
         subject = claims.get("sub")
         if not isinstance(subject, str) or not subject.isdigit() or len(subject) > 64:
             raise InvalidIdToken("invalid id_token")
-        return SUBJECT_PREFIX + subject
+        return Person(SUBJECT_PREFIX + subject, _verified_email(claims), _name(claims))
+
+
+@dataclass(frozen=True)
+class Person:
+    subject: str
+    email: str | None  # lower-cased; None unless email_verified is true
+    name: str
+
+
+def _verified_email(claims: dict[str, Any]) -> str | None:
+    email = claims.get("email")
+    if claims.get("email_verified") is not True or not isinstance(email, str) or not 3 <= len(email) <= 320 \
+            or "@" not in email:
+        return None
+    return email.strip().lower()
+
+
+def _name(claims: dict[str, Any]) -> str:
+    name = claims.get("name")
+    return name.strip()[:200] if isinstance(name, str) and name.strip() else "Member"

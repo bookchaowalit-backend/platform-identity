@@ -6,8 +6,8 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 1.0 |
-| Status | **in review**: checker R1 revise → 0.3; R2 revise → 0.4; R3 **pass** (3 P2 fixed in 0.5); **approved** by owner 2026-11-12 ("อนุมัติ ใช้ตามแนะนำ") |
+| Spec ID / version | SPEC-006 / 1.1 |
+| Status | **in review**: checker R1 revise → 0.3; R2 revise → 0.4; R3 **pass** (3 P2 fixed in 0.5); **approved** by owner 2026-11-12 ("อนุมัติ ใช้ตามแนะนำ"); **implemented** on branches (1.1 records the implementation decisions below) |
 | Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
 | Owner (maker) | Claude Code (session "Microservice SaaS integration adjustments") |
 | Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise, R2 revise, R3 pass |
@@ -384,11 +384,41 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 - **Coverage:** keep the repository's CI gate; this change must not lower it.
 - **Not test-first (exceptions):** none.
 
+### Implementation decisions (1.1)
+
+- **I1 — no BYPASSRLS.** `platform_tenancy` is NOLOGIN, NOBYPASSRLS, NOINHERIT. Cross-workspace reads use
+  SELECT-only policies `TO platform_tenancy` (identities, workspaces, memberships, roles, membership_roles,
+  signups, invitations). Writes stay under the workspace policies, because each function sets `app.workspace_id`
+  itself. This is risk 8's fallback, chosen up front so Neon needs no special attribute.
+- **I2 — the migrator holds `platform_tenancy` WITH INHERIT FALSE, SET TRUE** (PG16 needs SET for
+  `ALTER FUNCTION … OWNER TO`). 0009 grants the role `CREATE` on the schema only for the hand-over, then revokes it.
+  ACLs are set before the hand-over, because a revoke by a non-owner is a no-op.
+- **I3 — off switch.** `IDENTITY_TENANCY_MODE=off` (default) keeps today's behaviour exactly, AC-13/AC-15
+  included. `on` needs 0009 in the database. Deploy order: migration first, then identity with `on`.
+- **I4 — the AC-21 listing authenticates with the client's own assertion.** `POST /v1/service/installations`
+  takes a form `client_assertion` instead of a bearer token. A `"*"` client has no workspace to put in a token
+  before it knows its installations. It still consumes the `jti`.
+- **I5 — installation template = the client's registered `scopes`** (shared scopes mapped to their permission).
+  `IDENTITY_DEFAULT_INSTALLS` and `products` decide where a client may be installed.
+- **I6 — integration tests live in platform-empire**, like the existing identity parity tests:
+  `tests/test_tenancy.py` (SQL, 29 tests) and `tests/test_identity_tenancy.py` (identity HTTP against 0009,
+  7 tests; skipped when `platform_identity` is not installed). Unit tests in identity:
+  `tests/service/test_tenancy_config.py`.
+- **I7 — delegated tokens carry no `client_id` claim.** That claim marks a `client_credentials` token, which is
+  refused as a subject. `via` names the clients instead.
+
 ### Red / green log
 
 | Scenario | Test | Red | Green | Refactor note |
 |---|---|---|---|---|
-| AC-01 … AC-22, R-a … R-e | see §3 | — | — | — |
+| AC-01..AC-14, AC-20, AC-21, AC-23 (SQL) | platform-empire `tests/test_tenancy.py` | platform-empire b2df9db · `pytest tests/test_tenancy.py` · `function platform.tenancy_signup(...) does not exist` (27 failed) | 9cbe027 local: 543 + 29 passed; PR CI run | ACL order fixed after a test caught PUBLIC EXECUTE |
+| Tenancy owner role (D1, I2) | platform-empire `tests/test_neon.py::test_tenancy_owner_role_is_nologin_and_settable_by_the_migrator` | b2df9db · `(True, True, …) != (False, False, …)` | 9cbe027 | — |
+| AC-01..AC-23 over HTTP | platform-empire `tests/test_identity_tenancy.py` | **not test-first**: written after the identity code (exception E1 below) | local 7 passed; full suite 554 passed | first run caught 2 bugs: header annotation scope (FastAPI) and rate limiter in tests |
+| AC-22 registry, settings, person | identity `tests/service/test_tenancy_config.py` | **not test-first** (exception E1) | local 117 passed | — |
+
+**Exception E1 (needs owner approval in the DoD):** the identity HTTP layer and its unit tests were written
+together, not red first. The SQL rules, where the security decisions live, were red first. The HTTP tests were
+then run against the real database and caught two real bugs before any commit.
 
 ## 7. Risks and open questions
 
@@ -413,3 +443,4 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | 0.4 | 2026-11-12 | R2 fixes: identity authorizes every scope for the initiator and the service account at each hop (PDP never sees `act`); AC-19 rewritten around decide + begin_execution; `platform_tenancy` created by bootstrap/provision, functions re-owned, `pg_catalog` search_path, committing write path; suspended-W reactivation exception; person-origin chains only, delegating clients are `"*"`; audience form pinned; installation roles refused for humans; AC-23 install/reinstall; slugs public |
 | 0.5 | 2026-11-12 | R3 P2 fixes: suspended-owner exchange bypass is explicit at `/v1/token`; install requires the caller to hold the template's permissions + audit; migrator granted `platform_tenancy` NOINHERIT; ordering |
 | 1.0 | 2026-11-12 | Owner approved with the recommended answers to risks 1, 2, 5, 7 |
+| 1.1 | 2026-11-12 | Implementation decisions I1–I7, red/green log, exception E1 |
