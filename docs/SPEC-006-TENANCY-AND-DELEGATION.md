@@ -1,4 +1,4 @@
-# SPEC-001 — Tenant lifecycle and delegated service tokens
+# SPEC-006 — Tenant lifecycle and delegated service tokens
 
 Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions/ADR-0004-tdd-sdd-standard.md`).
 
@@ -6,14 +6,14 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-001 / 0.1 |
+| Spec ID / version | SPEC-006 / 0.2 |
 | Status | **draft**: waiting for owner approval |
-| Repository / path | bookchaowalit-backend/platform-identity / `specs/001-tenancy-and-delegation/spec.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
+| Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
 | Owner (maker) | Claude Code |
 | Reviewer (checker) | Fresh Claude reviewer subagent (no maker context) |
 | Approver | Owner (bookchaowalit) |
 | Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls on behalf of a tenant) |
-| Related docs | docs/SERVICE-CLIENTS.md, docs/PLATFORM-SERVICES-CUTOVER.md, platform-empire `0001_platform_core.sql`, `0008_identity_api_role.sql` |
+| Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, docs/PLATFORM-SERVICES-CUTOVER.md, platform-empire `0001_platform_core.sql`, `0008_identity_api_role.sql` |
 | Main-only | no: branch `spec/001-tenancy-delegation` → PR, merged locally |
 | Created / approved | 2026-11-11 / — |
 
@@ -52,6 +52,13 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 - **D4: multi-workspace workers need an installation.** A client registered with `"workspace": "*"` may get a
   token for workspace W only if its service-account identity is an active member of W. Signup installs the clients
   listed in `IDENTITY_DEFAULT_INSTALLS`. Removing that membership uninstalls the client.
+- **D6: sign-up is per product (absorbs finance-api PHASE-6-SAAS.md).** `POST /v1/signup` names a `product`
+  (e.g. `finance`). One workspace per (identity, product); a repeat returns the same workspace. The product decides
+  the role templates and default installs. `IDENTITY_SIGNUP_PRODUCTS` lists the products open for sign-up and is
+  the kill switch (empty = sign-up off).
+- **D7: delegation keeps every existing gate.** A delegated token for a paid audience (SPEC-005) gets the same
+  entitlement ceiling as a direct exchange, and a bundle subject token (aud list) delegates only from a member it
+  lists. Services may refuse money-moving actions for tokens with `act` (finance-api already does).
 - **D5: invitations are bound to a verified email and returned to the caller.** The invite code is shown once and
   stored only as an HMAC. Sending it by email through communication-api is a follow-up spec.
 
@@ -81,18 +88,19 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
 
 ### AC-01 — Sign up creates a workspace
 
-- **Given** `IDENTITY_SIGNUP_MODE=open` and a valid Google id_token (`email_verified = true`) whose subject has no identity
-- **When** `POST /v1/signup` with `{id_token, slug, name}`
+- **Given** `finance` in `IDENTITY_SIGNUP_PRODUCTS`, `IDENTITY_SIGNUP_MODE=open` and a valid Google id_token (`email_verified = true`) whose subject has no identity
+- **When** `POST /v1/signup` with `{id_token, product, slug, name}`
 - **Then** 201 with `{workspace_id, slug, identity_id}`
 - **And** one `identities` row (kind `human`), one `workspaces` row (status `active`, `owner_identity_id` = the identity),
-  one active membership, roles `owner`/`admin`/`member` created from `IDENTITY_ROLE_TEMPLATES_JSON`, `owner`
-  assigned, a membership for each client in `IDENTITY_DEFAULT_INSTALLS`, and one audit event `workspace.created`
+  one active membership, roles `owner`/`admin`/`member` created from the product's entry in `IDENTITY_ROLE_TEMPLATES_JSON`, `owner`
+  assigned, a membership for each client in the product's `IDENTITY_DEFAULT_INSTALLS` entry, and one audit event `workspace.created`
 - **Test:** `runtime_tests/test_tenancy.py::test_signup_creates_workspace_owner_roles_and_installs` · integration
 
 ### AC-02 — Signup modes
 
 - **Given** `IDENTITY_SIGNUP_MODE` is `closed` (the default), or `invite_code` with codes in `IDENTITY_SIGNUP_CODES_SHA256`
-- **When** signup is called without a matching code (`invite_code`), or at all (`closed`)
+- **When** signup is called without a matching code (`invite_code`), at all (`closed`), or for a product not in
+  `IDENTITY_SIGNUP_PRODUCTS`
 - **Then** 403 `signup_closed` and nothing is written. With a matching code in `invite_code` mode it behaves like AC-01
 - **Test:** `tests/service/test_tenancy.py::test_signup_modes` · unit
 
@@ -100,8 +108,8 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
 
 - **Given** an identity that already owns `IDENTITY_MAX_OWNED_WORKSPACES` workspaces (default 3)
 - **When** it signs up again
-- **Then** 409 `workspace_limit`. A taken slug → 409 `slug_taken`. A repeat of the same signup (same subject + slug)
-  within 24 h → 200 with the same body and no new rows
+- **Then** 409 `workspace_limit`. A taken slug → 409 `slug_taken`. A repeat for the same (subject, product) → 200 with
+  the existing workspace and no new rows, whatever slug is sent
 - **Test:** `runtime_tests/test_tenancy.py::test_signup_limit_slug_and_replay` · integration
 
 ### AC-04 — List my workspaces
@@ -175,6 +183,7 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
   `{sub: P, ws: W, aud: commerce-api, scope: "orders:write payments:write"}` issued by this identity
 - **When** the client calls `/v1/token` with `grant_type` = token-exchange, `subject_token` = that token,
   `subject_token_type` = access_token, `audience = payment-api`, `scope = payments:write`, and its client assertion
+- **And** when the subject token is a bundle token (`aud` is a list), `delegate_from` must be one of its members
 - **Then** 200 with a token `{sub: P, ws: W, aud: payment-api, scope: "payments:write",
   act: {sub: <commerce subject>, client_id: "commerce-api"}}`, and `exp` = min(now + 600, subject `exp`)
 - **Test:** `tests/service/test_delegation.py::test_delegated_token_keeps_subject_and_workspace` · unit
@@ -186,6 +195,9 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
   subject token's `aud` is not the client's `delegate_from`; or the audience is not registered for the client
 - **Then** 400 `invalid_scope` / `invalid_grant` / `invalid_target` and no token. A subject token from another
   issuer, expired, or with a bad signature → 400 `invalid_grant`
+- **And** a requested audience in `IDENTITY_ENTITLEMENT_CEILINGS_JSON` (or a member of such a bundle) gets the
+  same scope ceiling as a direct exchange when the workspace has no current pass (SPEC-005); delegating to a bundle
+  audience is refused (`invalid_target`), so a delegated token is always single-audience
 - **Test:** `tests/service/test_delegation.py::test_delegation_never_widens` · unit
 
 ### AC-14 — Chains are bounded and still authorized
@@ -235,6 +247,7 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
 | `GET /v1/service/installations` | new | service token, `identity.installation:read` |
 | `POST /v1/token` token-exchange with `subject_token_type=access_token` + client assertion | new | AC-12..AC-14 |
 | `POST /v1/token` `client_credentials` + `workspace` | changed | only for `"workspace": "*"` clients (AC-15) |
+| `POST /v1/signup` product list, role templates, installs | new | `IDENTITY_SIGNUP_PRODUCTS` (kill switch), `IDENTITY_ROLE_TEMPLATES_JSON` and `IDENTITY_DEFAULT_INSTALLS` keyed by product |
 | `IDENTITY_SERVICE_CLIENTS_JSON` | changed | optional `delegate_from`, `delegable_scopes`; `workspace` may be `"*"` |
 | New env | new | `IDENTITY_SIGNUP_MODE`, `IDENTITY_SIGNUP_CODES_SHA256`, `IDENTITY_MAX_OWNED_WORKSPACES`, `IDENTITY_ROLE_TEMPLATES_JSON`, `IDENTITY_DEFAULT_INSTALLS`, `IDENTITY_INVITE_KEY` (secret) |
 | identity's own audience `identity-api` | new | added to `IDENTITY_TOKEN_AUDIENCES`; identity verifies its own tokens with its own key |
@@ -293,3 +306,4 @@ token with `aud = identity-api`. Its `ws` is the workspace acted on, and it neve
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-11-11 | First draft from the SaaS gap review (items 1 and 3) |
+| 0.2 | 2026-11-12 | Renumbered SPEC-006 (identity has SPEC-004/005); absorbed finance-api PHASE-6-SAAS.md per-product sign-up (D6); bundle and paid-audience rules for delegation (D7) |
