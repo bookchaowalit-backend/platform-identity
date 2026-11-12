@@ -6,11 +6,11 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 0.3 |
-| Status | **in review**: checker R1 = revise (3 P1, 6 P2), addressed in 0.3; waiting for R2, then owner approval |
+| Spec ID / version | SPEC-006 / 0.4 |
+| Status | **in review**: checker R1 revise → 0.3; R2 revise (2 P1, 2 P2, 2 P3) → 0.4; waiting for R3, then owner approval |
 | Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
 | Owner (maker) | Claude Code (session "Microservice SaaS integration adjustments") |
-| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise |
+| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise, R2 revise |
 | Approver | Owner (bookchaowalit) |
 | Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls for a tenant) |
 | Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs; its author agreed 2026-11-12), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, platform-empire 0001/0002/0003/0008 |
@@ -41,19 +41,29 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 ### Decisions
 
 - **D1 — identity owns the API; platform-empire owns the schema.** Writes go through `SECURITY DEFINER` functions in
-  migration 0009. They are owned by a new NOLOGIN role `platform_tenancy` with `BYPASSRLS` and only the table grants
-  the functions need. Each function: `SET search_path = platform, pg_temp`; `REVOKE EXECUTE … FROM PUBLIC`;
+  migration 0009, owned by a NOLOGIN role `platform_tenancy` with `BYPASSRLS`. The migrator cannot create such a
+  role (NOSUPERUSER, NOCREATEROLE), so — like every runtime role — it is created **before** the migration by
+  `db/bootstrap/roles.sql` locally and by `empire-neon provision` / `ensure_runtime_roles` hosted (Neon's
+  `neondb_owner` can grant BYPASSRLS; verified on a branch before rollout). 0009 then grants it `USAGE` on the
+  schema and exactly the table privileges the functions use, and runs `ALTER FUNCTION … OWNER TO platform_tenancy`
+  for each. Each function: `SET search_path = pg_catalog, pg_temp` with schema-qualified names (the existing
+  convention); `REVOKE EXECUTE … FROM PUBLIC`;
   `GRANT EXECUTE … TO identity_api` only; it takes the caller's identity and workspace as parameters that identity
   fills **only from a verified token** (never from the request body or path); it sets `app.workspace_id` to that
-  workspace itself before touching tenant rows; it writes its audit event in the same transaction. `identity_api`
-  keeps no table write grant (0008's rule).
+  workspace itself before touching tenant rows; it writes its audit event in the same transaction. Because the owner bypasses RLS, workspace safety rests on the
+  function code, so each function has its own test that it uses only the token-derived identity and workspace.
+  identity calls them in a committing transaction (today's `bound()` always rolls back; tenancy writes get a
+  `bound_write()` that commits on success). `identity_api` keeps no table write grant (0008's rule).
 - **D2 — no new user store.** People stay `platform.identities` (kind `human`, `external_subject` = Google `sub`).
   Google is still the only provider.
 - **D3 — delegation follows the platform's existing claim meaning, not a new one.** In this platform `sub` is the
   identity *performing* the call and `act.sub` is the identity that *initiated* it (`auth.py`: `initiated_by`;
   `check_execution` requires the initiator to be an active member). So a delegated token is
-  `{sub: <service account>, ws: W, act: {sub: <initiator>}, via: [<client ids>]}`. Downstream PDP checks then run
-  for the installed service account in W, and the initiator must still be an active member of W. Services that
+  `{sub: <service account>, ws: W, act: {sub: <initiator>}, via: [<client ids>]}`. Downstream PDP checks run for the installed service account in W (`platform.authorize` uses `sub`; it does not
+  see `act`). Because the PDP never checks the initiator, **identity does it at every hop**: each requested scope
+  must be allowed by `platform.authorize` for the initiator P in W **and** for the service account in W, so a
+  delegated token never exceeds what both may do now. Only person-origin chains are delegable: the subject token's
+  `sub` (or, for a delegated subject, its `act.sub`) must be a `human` identity; worker-origin tokens are refused. Services that
   refuse delegated tokens (finance-api: `delegated_token_refused` for `del`/`obo`/`act`) keep refusing them, because
   `act` is always present.
 - **D4 — an installation is a membership of the service account.** A client registered with `"workspace": "*"` (or
@@ -96,7 +106,8 @@ Common rules (each has its own test in `tests/service/test_tenancy_common.py`):
 - **R-d** every admin call re-checks in the database that the caller is an active identity with an active membership
   in an active W and holds the permission now (a removed admin's 600 s token stops working at once);
 - **R-e** no answer reveals whether an email, Google subject, workspace or invitation exists outside the caller's own
-  workspace; the "not found / not allowed / wrong" outcomes of one endpoint share one status and body.
+  workspace; the "not found / not allowed / wrong" outcomes of one endpoint share one status and body. Slugs are public
+  names, so `slug_taken` is an accepted disclosure.
 
 Permissions used (canonical, so they pass the `platform.permission` domain): `identity.member:read`,
 `identity.member:admin`, `identity.workspace:admin`, `identity.installation:read`.
@@ -188,7 +199,8 @@ Permissions used (canonical, so they pass the `platform.permission` domain): `id
 - **Then** the list holds only W's members with `{identity_id, kind, display_name, status, roles}`; a change replaces
   roles or status and writes one audit event. A suspended member's next exchange for W → 400 `invalid_grant`;
   reactivating restores it
-- **And** for a `service_account` member, PATCH → 400 `installation_fixed`; DELETE = uninstall (allowed)
+- **And** for a `service_account` member, PATCH → 400 `installation_fixed`; DELETE = uninstall (allowed). PATCH
+  that gives a human an `installation:*` role → 400 `invalid_role`; giving `owner` follows AC-11
 - **Test:** `runtime_tests/test_tenancy.py::test_members_list_patch_delete` · integration
 
 ### AC-11 — Owner role and last owner
@@ -203,8 +215,10 @@ Permissions used (canonical, so they pass the `platform.permission` domain): `id
 - **Given** an owner token for W (`identity.workspace:admin`, held only by `owner`)
 - **When** `PATCH /v1/workspace` `{name?}` or `{status: suspended | active | closed}`
 - **Then** 200; `closed` is final (any later PATCH → 409 `workspace_closed`); a non-owner → 403; audit
-  `workspace.updated`. A suspended W can only be reactivated by its owner through a token, so the owner's exchange
-  for a suspended W is allowed with `identity.workspace:admin` alone (no other scope)
+  `workspace.updated`. Reactivation is the one exception to "active W only": `platform.authorize` refuses everything in a
+  non-active W, so for a **suspended** W the owner's exchange may ask for `identity.workspace:admin` alone, and
+  `tenancy_update_workspace` checks an active human `owner` membership directly instead of calling `authorize`.
+  No other endpoint or scope works in a suspended W. Test: owner reactivates; admin cannot; owner gets no other scope
 - **Test:** `runtime_tests/test_tenancy.py::test_workspace_patch_status` · integration
 
 ### AC-13 — No tokens for a non-active workspace or identity
@@ -240,13 +254,14 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 
 ### AC-16 — Delegate on behalf of the initiator
 
-- **Given** client `commerce-api` (`delegate_from: commerce-api`, `audiences ⊇ {payment-api}`,
-  `delegable_scopes ⊇ {payments.intent:write}`) installed in W, and a subject token issued by this identity
+- **Given** client `commerce-api` (`workspace: "*"`, `delegate_from: commerce-api`, `audiences ⊇ {payment-api}`,
+  `delegable_scopes ⊇ {payments.intent:write}`) installed in W (a delegating client is always a `"*"` client,
+  because the token's workspace comes from the subject), P a human member allowed `payments.intent:write`, and a subject token issued by this identity
   `{sub: P, ws: W, aud: [commerce-api, platform-api], scope: "commerce.order:write payments.intent:write"}`
 - **When** the client calls `/v1/token` with the token-exchange grant, `subject_token_type` = access_token,
   `audience = payment-api`, `scope = payments.intent:write`, and its client assertion
-- **Then** 200 with `{sub: <commerce-api subject>, ws: W, aud: [payment-api, platform-api] (cell audience) or
-  payment-api, scope: "payments.intent:write", act: {sub: P}, via: ["commerce-api"]}` and `exp` = min(now + 600,
+- **Then** 200 with `{sub: <commerce-api subject>, ws: W, aud: <same form as a direct exchange: [payment-api, platform-api]
+  when payment-api is a cell audience, otherwise "payment-api">, scope: "payments.intent:write", act: {sub: P}, via: ["commerce-api"]}` and `exp` = min(now + 600,
   subject `exp`); a bundle subject token (300 s) therefore yields ≤ 300 s
 - **Test:** `tests/service/test_delegation.py::test_delegated_token_claims` · unit
 
@@ -254,7 +269,8 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 
 - **Then** refused, with no token, when: a requested scope is missing from the subject token's `scope`; the subject
   token has **no** `scope` (unrestricted tokens cannot be delegated → 400 `invalid_scope`); a scope is outside
-  `delegable_scopes`; `platform.authorize` does not allow it for the service account in W; `delegate_from` is not in
+  `delegable_scopes`; `platform.authorize` does not allow it for the initiator P in W or for the service account in W; the chain's
+  initiator is not a `human` (a worker's `client_credentials` token as subject → `invalid_grant`); `delegate_from` is not in
   the subject `aud`; the target is not in `audiences`, is `identity-api` or a bundle → `invalid_target`; the subject
   token is from another issuer, expired, badly signed, or itself a `client_credentials` token of a fixed-workspace
   client → `invalid_grant`
@@ -265,7 +281,8 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 - **Given** a subject token that is itself delegated (`via` has 1 entry)
 - **Then** the next hop keeps `act.sub` = the original initiator and appends to `via`; `via` may hold at most 3
   client ids, a 4th hop → 400 `invalid_grant`. Every hop re-checks: the initiator is an active identity and active
-  member of active W; the calling service account is installed in W; each scope is authorized for it. A target in
+  member of active W; the calling service account is installed in W; each scope is authorized for both (D3), so
+  demoting P stops the next hop. A target in
   `IDENTITY_ENTITLEMENT_CEILINGS_JSON` (or a member of such a bundle) gets SPEC-005's ceiling when W has no
   current pass
 - **And** uninstalling the client or removing the initiator makes the next hop fail; existing hop tokens die at
@@ -274,10 +291,12 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 
 ### AC-19 — Downstream sees a normal token
 
-- **When** a delegated token from AC-16 is sent to `POST /v1/authz/decide` (record and shadow) for a permission
-  the installation role holds
-- **Then** `allow`, with `initiated_by = P` and `executed_by` = the service account; for a permission it lacks, `deny`
-- **Test:** `runtime_tests/test_delegation.py::test_delegated_token_passes_platform_pdp` · integration
+- **When** a delegated token from AC-16 reaches a cell, which calls `/v1/authz/decide` and then
+  `platform.begin_execution`
+- **Then** decide answers for the service account only (`allow` for a permission its installation role holds,
+  `deny` otherwise; decide ignores `act`, as today); `begin_execution(initiated_by = P, executed_by = service account,
+  on_behalf_of = service account)` succeeds while P is an active member and fails after P is removed
+- **Test:** `runtime_tests/test_delegation.py::test_delegated_token_through_decide_and_execution` · integration
 
 ### AC-20 — Multi-workspace worker token
 
@@ -294,6 +313,15 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 - **Then** 200 `{workspaces: [ids ordered ascending], next: <last id> | null}` for active W where its own identity
   (`sub`) is installed; an `after` that is not a UUID → 400 `invalid_request`
 - **Test:** `runtime_tests/test_delegation.py::test_installations_paged_and_own` · integration
+
+### AC-23 — Install and reinstall
+
+- **Given** an admin token for W of product `finance`
+- **When** `POST /v1/installations` `{client_id}` for a client whose registry `products` includes `finance`
+- **Then** 201 and the client is installed with the product's installation template (or 200 if already installed);
+  a client not allowed for the product → 400 `invalid_client`. This is also how existing workspaces get a client
+  that a product adds later
+- **Test:** `runtime_tests/test_tenancy.py::test_install_and_reinstall` · integration
 
 ### AC-22 — Backward compatibility
 
@@ -314,6 +342,7 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | `POST /v1/invitations/accept` | new | `{id_token, code}` → 200 `{workspace_id}` |
 | `GET /v1/members`; `PATCH`, `DELETE /v1/members/{identity_id}` | new | `identity.member:read` / `:admin` |
 | `PATCH /v1/workspace` | new | `identity.workspace:admin` |
+| `POST /v1/installations` | new | `identity.member:admin`; AC-23 |
 | `GET /v1/service/installations` | new | `identity.installation:read` |
 | `POST /v1/token`: token exchange, `subject_token_type=access_token` + client assertion | new | AC-16..AC-19 |
 | `POST /v1/token`: `client_credentials` + `workspace` | changed | AC-20, AC-22 |
@@ -365,6 +394,7 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | 4 | Migration 0009 runs on the shared `empire` database; deploy goes through the Railway approval gate | shared DB change | Claude + owner | snapshot branch first |
 | 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | — |
 | 6 | Revocation is by expiry (≤ 600 s; admin calls re-check, R-d) | short exposure of downstream hop tokens | Owner accepts | — |
+| 8 | `platform_tenancy` needs BYPASSRLS on Neon; checked on a branch before rollout, else fall back to explicit per-function policies | migration plan | Claude | — |
 | 7 | AC-15 makes direct exchange refuse canonical scopes the person lacks; a caller that asked for more than it holds would now get 403 | behaviour change | Owner | callers checked before deploy |
 
 ## 8. Change log
@@ -373,4 +403,5 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 |---|---|---|
 | 0.1 | 2026-11-11 | First draft from the SaaS gap review (items 1 and 3) |
 | 0.2 | 2026-11-12 | Renumbered SPEC-006; absorbed finance-api per-product sign-up (D6); bundle and paid-audience rules (D7) |
+| 0.4 | 2026-11-12 | R2 fixes: identity authorizes every scope for the initiator and the service account at each hop (PDP never sees `act`); AC-19 rewritten around decide + begin_execution; `platform_tenancy` created by bootstrap/provision, functions re-owned, `pg_catalog` search_path, committing write path; suspended-W reactivation exception; person-origin chains only, delegating clients are `"*"`; audience form pinned; installation roles refused for humans; AC-23 install/reinstall; slugs public |
 | 0.3 | 2026-11-12 | R1 fixes: D1 owner role + fail-closed functions; D3 claim meaning aligned with `auth.py` (`sub` = service account, `act.sub` = initiator, `via` chain); D4 installation = templated membership; AC-15 authorize every scope; scope-less tokens not delegable; R-a..R-e; atomic accept, owner locking, signup key; split ACs; new scenarios (concurrent slug, reactivate, expired code, existing member, uninstall mid-chain, PDP pass-through) |
