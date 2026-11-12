@@ -216,6 +216,7 @@ def register(app: FastAPI, *, config: TenancyConfig, connection: Callable[[], Ab
             with connection() as conn:
                 conn.row_factory = dict_row
                 try:
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- composed with psycopg sql.Identifier from the FUNCTIONS allowlist; values are bound parameters
                     row = conn.execute(query, args).fetchone()
                     conn.commit()
                 except psycopg.Error as exc:
