@@ -6,8 +6,8 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 0.5 |
-| Status | **in review**: checker R1 revise → 0.3; R2 revise → 0.4; R3 **pass** (3 P2 fixed in 0.5); waiting for owner approval |
+| Spec ID / version | SPEC-006 / 1.0 |
+| Status | **in review**: checker R1 revise → 0.3; R2 revise → 0.4; R3 **pass** (3 P2 fixed in 0.5); **approved** by owner 2026-11-12 ("อนุมัติ ใช้ตามแนะนำ") |
 | Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
 | Owner (maker) | Claude Code (session "Microservice SaaS integration adjustments") |
 | Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise, R2 revise, R3 pass |
@@ -15,7 +15,7 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 | Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls for a tenant) |
 | Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs; its author agreed 2026-11-12), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, platform-empire 0001/0002/0003/0008 |
 | Main-only | no: branch `spec/001-tenancy-delegation` → PR, merged locally |
-| Created / approved | 2026-11-11 / — |
+| Created / approved | 2026-11-11 / 2026-11-12 |
 
 ## 1. Problem and intent
 
@@ -394,13 +394,13 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 
 | # | Risk or question | Impact | Owner | Resolution / date |
 |---|---|---|---|---|
-| 1 | Signup mode at launch: `closed`, `invite_code` (recommended) or `open`? | who can create a tenant | Owner | — |
-| 2 | Role templates per product. Proposal for `finance`: owner = the ten cells' read/write/delete + `finance-api` + the `identity.*` permissions; admin = owner minus `identity.workspace:admin`; member = cells' read/write | what a customer can do | Owner | — |
+| 1 | Signup mode at launch: `closed`, `invite_code` (recommended) or `open`? | who can create a tenant | Owner | `invite_code` (owner 2026-11-12) |
+| 2 | Role templates per product. Proposal for `finance`: owner = the ten cells' read/write/delete + `finance-api` + the `identity.*` permissions; admin = owner minus `identity.workspace:admin`; member = cells' read/write | what a customer can do | Owner | as proposed (owner 2026-11-12) |
 | 3 | `IDENTITY_GOOGLE_CLIENT_IDS` still unset: no person token, signup or acceptance works in production | blocks go-live, not build | Owner | — |
 | 4 | Migration 0009 runs on the shared `empire` database; deploy goes through the Railway approval gate | shared DB change | Claude + owner | snapshot branch first |
-| 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | — |
+| 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | this session may write, on branches + PR; no deploy without a second approval (owner 2026-11-12) |
 | 6 | Revocation is by expiry (≤ 600 s; admin calls re-check, R-d) | short exposure of downstream hop tokens | Owner accepts | — |
-| 7 | AC-15 makes direct exchange refuse canonical scopes the person lacks; a caller that asked for more than it holds would now get 403 | behaviour change | Owner | callers checked before deploy |
+| 7 | AC-15 makes direct exchange refuse canonical scopes the person lacks; a caller that asked for more than it holds would now get 403 | behaviour change | Owner | accepted (owner 2026-11-12); callers checked before deploy |
 | 8 | `platform_tenancy` needs BYPASSRLS on Neon; checked on a branch before rollout, else fall back to explicit per-function policies | migration plan | Claude | — |
 
 ## 8. Change log
@@ -412,3 +412,4 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | 0.3 | 2026-11-12 | R1 fixes: D1 owner role + fail-closed functions; D3 claim meaning aligned with `auth.py` (`sub` = service account, `act.sub` = initiator, `via` chain); D4 installation = templated membership; AC-15 authorize every scope; scope-less tokens not delegable; R-a..R-e; atomic accept, owner locking, signup key; split ACs; new scenarios (concurrent slug, reactivate, expired code, existing member, uninstall mid-chain, PDP pass-through) |
 | 0.4 | 2026-11-12 | R2 fixes: identity authorizes every scope for the initiator and the service account at each hop (PDP never sees `act`); AC-19 rewritten around decide + begin_execution; `platform_tenancy` created by bootstrap/provision, functions re-owned, `pg_catalog` search_path, committing write path; suspended-W reactivation exception; person-origin chains only, delegating clients are `"*"`; audience form pinned; installation roles refused for humans; AC-23 install/reinstall; slugs public |
 | 0.5 | 2026-11-12 | R3 P2 fixes: suspended-owner exchange bypass is explicit at `/v1/token`; install requires the caller to hold the template's permissions + audit; migrator granted `platform_tenancy` NOINHERIT; ordering |
+| 1.0 | 2026-11-12 | Owner approved with the recommended answers to risks 1, 2, 5, 7 |
