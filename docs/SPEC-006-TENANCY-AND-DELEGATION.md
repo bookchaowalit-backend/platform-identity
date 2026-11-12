@@ -6,11 +6,11 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
 
 | Field | Value |
 |---|---|
-| Spec ID / version | SPEC-006 / 0.4 |
-| Status | **in review**: checker R1 revise → 0.3; R2 revise (2 P1, 2 P2, 2 P3) → 0.4; waiting for R3, then owner approval |
+| Spec ID / version | SPEC-006 / 0.5 |
+| Status | **in review**: checker R1 revise → 0.3; R2 revise → 0.4; R3 **pass** (3 P2 fixed in 0.5); waiting for owner approval |
 | Repository / path | bookchaowalit-backend/platform-identity / `docs/SPEC-006-TENANCY-AND-DELEGATION.md`; schema part in bookchaowalit/platform-empire `services/platform/migrations/0009_tenancy.sql` |
 | Owner (maker) | Claude Code (session "Microservice SaaS integration adjustments") |
-| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise, R2 revise |
+| Reviewer (checker) | Fresh Claude reviewer subagent (no maker context): R1 revise, R2 revise, R3 pass |
 | Approver | Owner (bookchaowalit) |
 | Requirement links | Owner request 2026-11-11: "every microservice will be used in a SaaS, and one product may use several services together" → gap review items 1 (tenant lifecycle) and 3 (service-to-service calls for a tenant) |
 | Related docs | finance-api `docs/PHASE-6-SAAS.md` (provisioning proposal this spec absorbs; its author agreed 2026-11-12), docs/PAID-AUDIENCES.md (SPEC-005), audience bundles (`IDENTITY_AUDIENCE_BUNDLES_JSON`), docs/SPEC-SHARED-REPLAY-AND-LIMITS.md, docs/SERVICE-CLIENTS.md, platform-empire 0001/0002/0003/0008 |
@@ -44,7 +44,8 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs `docs/architecture/decisions
   migration 0009, owned by a NOLOGIN role `platform_tenancy` with `BYPASSRLS`. The migrator cannot create such a
   role (NOSUPERUSER, NOCREATEROLE), so — like every runtime role — it is created **before** the migration by
   `db/bootstrap/roles.sql` locally and by `empire-neon provision` / `ensure_runtime_roles` hosted (Neon's
-  `neondb_owner` can grant BYPASSRLS; verified on a branch before rollout). 0009 then grants it `USAGE` on the
+  `neondb_owner` can grant BYPASSRLS; verified on a branch before rollout). The bootstrap also runs `GRANT platform_tenancy TO empire_migrator` with the migrator `NOINHERIT` toward it
+  (needed for `ALTER FUNCTION … OWNER TO`; BYPASSRLS never applies to migrator sessions without `SET ROLE`). 0009 then grants it `USAGE` on the
   schema and exactly the table privileges the functions use, and runs `ALTER FUNCTION … OWNER TO platform_tenancy`
   for each. Each function: `SET search_path = pg_catalog, pg_temp` with schema-qualified names (the existing
   convention); `REVOKE EXECUTE … FROM PUBLIC`;
@@ -216,9 +217,12 @@ Permissions used (canonical, so they pass the `platform.permission` domain): `id
 - **When** `PATCH /v1/workspace` `{name?}` or `{status: suspended | active | closed}`
 - **Then** 200; `closed` is final (any later PATCH → 409 `workspace_closed`); a non-owner → 403; audit
   `workspace.updated`. Reactivation is the one exception to "active W only": `platform.authorize` refuses everything in a
-  non-active W, so for a **suspended** W the owner's exchange may ask for `identity.workspace:admin` alone, and
-  `tenancy_update_workspace` checks an active human `owner` membership directly instead of calling `authorize`.
-  No other endpoint or scope works in a suspended W. Test: owner reactivates; admin cannot; owner gets no other scope
+  non-active W, so for a **suspended** W the owner's exchange may ask for `identity.workspace:admin` alone, `/v1/token` skips AC-15's `authorize` call for exactly that one scope and
+  instead `tenancy_active` checks an active human `owner` membership of the suspended W; `tenancy_update_workspace`
+  checks the same directly.
+  No other endpoint or scope works in a suspended W. Tests: `test_workspace_patch_status` (owner reactivates; admin cannot) and
+  `tests/service/test_tenancy.py::test_suspended_owner_exchange_only_workspace_admin` (at `/v1/token`: the owner gets
+  that scope alone, any other scope or a non-owner → `invalid_grant`)
 - **Test:** `runtime_tests/test_tenancy.py::test_workspace_patch_status` · integration
 
 ### AC-13 — No tokens for a non-active workspace or identity
@@ -314,15 +318,6 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
   (`sub`) is installed; an `after` that is not a UUID → 400 `invalid_request`
 - **Test:** `runtime_tests/test_delegation.py::test_installations_paged_and_own` · integration
 
-### AC-23 — Install and reinstall
-
-- **Given** an admin token for W of product `finance`
-- **When** `POST /v1/installations` `{client_id}` for a client whose registry `products` includes `finance`
-- **Then** 201 and the client is installed with the product's installation template (or 200 if already installed);
-  a client not allowed for the product → 400 `invalid_client`. This is also how existing workspaces get a client
-  that a product adds later
-- **Test:** `runtime_tests/test_tenancy.py::test_install_and_reinstall` · integration
-
 ### AC-22 — Backward compatibility
 
 - **Then** existing registries (fixed workspace, no new keys) parse unchanged; person exchange, bundle and
@@ -331,6 +326,17 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 - **And** a fixed-workspace client that now also sends `workspace`: equal to its own → accepted; different → 400
   `invalid_request` (today the field is ignored; no current caller sends it — checked in the 5 caller repos before deploy)
 - **Test:** `tests/service/test_app.py`, `tests/service/test_service_clients.py` + `test_registry_new_keys` · unit
+
+### AC-23 — Install and reinstall
+
+- **Given** an admin token for W of product `finance`
+- **When** `POST /v1/installations` `{client_id}` for a client whose registry `products` includes `finance`
+- **Then** 201 and the client is installed with the product's installation template (or 200 if already installed),
+  audit `installation.created`; the caller must hold every permission in that template itself (`platform.authorize`
+  for each), otherwise 403 `insufficient_privilege`, so installing never grants more than the admin has;
+  a client not allowed for the product → 400 `invalid_client`. This is also how existing workspaces get a client
+  that a product adds later
+- **Test:** `runtime_tests/test_tenancy.py::test_install_and_reinstall`, `::test_install_needs_template_permissions` · integration
 
 ## 4. Interfaces and data
 
@@ -394,8 +400,8 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | 4 | Migration 0009 runs on the shared `empire` database; deploy goes through the Railway approval gate | shared DB change | Claude + owner | snapshot branch first |
 | 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | — |
 | 6 | Revocation is by expiry (≤ 600 s; admin calls re-check, R-d) | short exposure of downstream hop tokens | Owner accepts | — |
-| 8 | `platform_tenancy` needs BYPASSRLS on Neon; checked on a branch before rollout, else fall back to explicit per-function policies | migration plan | Claude | — |
 | 7 | AC-15 makes direct exchange refuse canonical scopes the person lacks; a caller that asked for more than it holds would now get 403 | behaviour change | Owner | callers checked before deploy |
+| 8 | `platform_tenancy` needs BYPASSRLS on Neon; checked on a branch before rollout, else fall back to explicit per-function policies | migration plan | Claude | — |
 
 ## 8. Change log
 
@@ -403,5 +409,6 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 |---|---|---|
 | 0.1 | 2026-11-11 | First draft from the SaaS gap review (items 1 and 3) |
 | 0.2 | 2026-11-12 | Renumbered SPEC-006; absorbed finance-api per-product sign-up (D6); bundle and paid-audience rules (D7) |
-| 0.4 | 2026-11-12 | R2 fixes: identity authorizes every scope for the initiator and the service account at each hop (PDP never sees `act`); AC-19 rewritten around decide + begin_execution; `platform_tenancy` created by bootstrap/provision, functions re-owned, `pg_catalog` search_path, committing write path; suspended-W reactivation exception; person-origin chains only, delegating clients are `"*"`; audience form pinned; installation roles refused for humans; AC-23 install/reinstall; slugs public |
 | 0.3 | 2026-11-12 | R1 fixes: D1 owner role + fail-closed functions; D3 claim meaning aligned with `auth.py` (`sub` = service account, `act.sub` = initiator, `via` chain); D4 installation = templated membership; AC-15 authorize every scope; scope-less tokens not delegable; R-a..R-e; atomic accept, owner locking, signup key; split ACs; new scenarios (concurrent slug, reactivate, expired code, existing member, uninstall mid-chain, PDP pass-through) |
+| 0.4 | 2026-11-12 | R2 fixes: identity authorizes every scope for the initiator and the service account at each hop (PDP never sees `act`); AC-19 rewritten around decide + begin_execution; `platform_tenancy` created by bootstrap/provision, functions re-owned, `pg_catalog` search_path, committing write path; suspended-W reactivation exception; person-origin chains only, delegating clients are `"*"`; audience form pinned; installation roles refused for humans; AC-23 install/reinstall; slugs public |
+| 0.5 | 2026-11-12 | R3 P2 fixes: suspended-owner exchange bypass is explicit at `/v1/token`; install requires the caller to hold the template's permissions + audit; migrator granted `platform_tenancy` NOINHERIT; ordering |
