@@ -488,7 +488,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "act": {"sub": str(initiator)}, "via": [*via, client.client_id], "scope": " ".join(granted),
             "iat": now, "exp": expires, "jti": str(uuid.uuid4()),
         }
-        log.info("delegated token client=%s audience=%s hops=%d", client.client_id, audience, len(via) + 1)
+        log.info("delegation issued client=%s audience=%s hops=%d", client.client_id, audience, len(via) + 1)
         return JSONResponse({
             "access_token": signing_key.sign(claims),
             "issued_token_type": ACCESS_TOKEN_TYPE,

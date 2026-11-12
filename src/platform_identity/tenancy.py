@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
@@ -54,6 +55,13 @@ ROLE = r"^[a-z][a-z0-9_-]{0,62}$"
 OWN_TOKEN_LEEWAY_SECONDS = 30
 # Module level: with postponed annotations FastAPI resolves route annotations from module globals.
 Auth = Annotated[str | None, Header()]
+
+# The only platform functions this module calls (migration 0009).
+FUNCTIONS = frozenset({
+    "tenancy_signup", "tenancy_my_workspaces", "tenancy_invite", "tenancy_list_invitations",
+    "tenancy_revoke_invitation", "tenancy_accept", "tenancy_list_members", "tenancy_set_member",
+    "tenancy_remove_member", "tenancy_update_workspace", "tenancy_installations", "tenancy_install",
+})
 
 # Function error code → (HTTP status, OAuth-style error). Anything else is a 503.
 ERRORS: dict[str, tuple[int, str]] = {
@@ -200,13 +208,15 @@ def register(app: FastAPI, *, config: TenancyConfig, connection: Callable[[], Ab
 
     def call(fn: str, *args: Any) -> Any:
         """Run one tenancy function as identity_api and commit; its error code becomes the HTTP answer."""
-        placeholders = ", ".join(["%s"] * len(args))
+        if fn not in FUNCTIONS:
+            raise ValueError(f"unknown tenancy function {fn}")
+        query = sql.SQL("SELECT {}({}) AS result").format(
+            sql.Identifier("platform", fn), sql.SQL(", ").join(sql.Placeholder() * len(args)))
         try:
             with connection() as conn:
                 conn.row_factory = dict_row
                 try:
-                    row = conn.execute(f"SELECT platform.{fn}({placeholders}) AS result",  # nosemgrep: fn is a fixed name below
-                                       args).fetchone()
+                    row = conn.execute(query, args).fetchone()
                     conn.commit()
                 except psycopg.Error as exc:
                     conn.rollback()
