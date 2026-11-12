@@ -37,7 +37,7 @@ Source: `architecture-docs:docs/architecture/SCALE-READINESS.md`, P1 findings fo
 
 | AC | Given / When / Then |
 |---|---|
-| AC-01 | Given two app instances sharing one database, when the same assertion `jti` is presented to each, then the first gets a token and the second gets `invalid_grant`. |
+| AC-01 | Given two app instances sharing one database, when the same assertion `jti` is presented to each, then the first gets a token and the second gets 401 `invalid_client` ("client authentication failed"), the same contract as today (`app.py:397-399`). |
 | AC-02 | Given an assertion already used, when identity restarts and the same assertion is presented before it expires, then it is refused. |
 | AC-03 | Given expired `jti` rows, when the cleanup runs (on insert, bounded batch), then they are deleted and the table stays bounded. |
 | AC-04 | Given the replay store is unreachable, then token exchange fails closed with 503. It never falls back to the in-memory cache. |
@@ -52,7 +52,8 @@ Source: `architecture-docs:docs/architecture/SCALE-READINESS.md`, P1 findings fo
   - Each insert also deletes up to 100 expired rows.
   - Database time is the clock, as the limiter already does.
 - **Roles:** writes go through the existing bounded serving pool (`IDENTITY_DB_POOL_MAX`). The serving role gets
-  INSERT/DELETE on this table only, and the migration applies before merge.
+  SELECT, INSERT and DELETE on this table only: the expiry cleanup is a `DELETE … WHERE expires_at < now()`,
+  and a qualified DELETE needs SELECT. The migration applies before merge.
 - **Proxies:** confirm the address Railway's edge connects from, using a request log or header capture on
   staging. Then set `IDENTITY_TRUSTED_PROXIES` and switch to `IDENTITY_RATE_LIMIT_MODE=postgres` as a separate,
   reversible variable change. Rollback is `local`.
