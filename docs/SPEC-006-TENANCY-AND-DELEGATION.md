@@ -404,6 +404,10 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
   `tests/test_tenancy.py` (SQL, 29 tests) and `tests/test_identity_tenancy.py` (identity HTTP against 0009,
   7 tests; skipped when `platform_identity` is not installed). Unit tests in identity:
   `tests/service/test_tenancy_config.py`.
+- **I8 — role grants never exceed the granter** (review P2): a non-owner may invite to or assign only roles whose
+  permissions it holds; the owner role stays protected while its holder is suspended; `"*"` client tokens get the
+  SPEC-005 paid-audience ceiling like person and delegated tokens; sign-up replay matches the subject HMAC under the
+  current or previous invite key.
 - **I7 — delegated tokens carry no `client_id` claim.** That claim marks a `client_credentials` token, which is
   refused as a subject. `via` names the clients instead.
 
@@ -415,6 +419,8 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 | Tenancy owner role (D1, I2) | platform-empire `tests/test_neon.py::test_tenancy_owner_role_is_nologin_and_settable_by_the_migrator` | b2df9db · `(True, True, …) != (False, False, …)` | 9cbe027 | — |
 | AC-01..AC-23 over HTTP | platform-empire `tests/test_identity_tenancy.py` | **not test-first**: written after the identity code (exception E1 below) | local 7 passed; full suite 554 passed | first run caught 2 bugs: header annotation scope (FastAPI) and rate limiter in tests |
 | AC-22 registry, settings, person | identity `tests/service/test_tenancy_config.py` | **not test-first** (exception E1) | local 117 passed | — |
+
+| Code review findings (fresh reviewer, 2026-11-12: 0 P0/P1, 2 P2, 3 P3) | platform-empire `tests/test_tenancy.py` review-fix tests | platform-empire red commit · 5 failed | fix commit · 558 passed | P3 "\"*\" tokens skip the paid ceiling" fixed in identity (`cap_scopes`) |
 
 **Exception E1 (needs owner approval in the DoD):** the identity HTTP layer and its unit tests were written
 together, not red first. The SQL rules, where the security decisions live, were red first. The HTTP tests were

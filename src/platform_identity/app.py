@@ -522,6 +522,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                     if not authorized(conn, client.subject, workspace, requested_scope):
                         raise _token_error(403, "invalid_scope", "requested scope is not authorized")
             token_workspace = workspace
+            # A "*" client acts for one customer workspace, so SPEC-005's paid-audience ceiling applies as for
+            # person and delegated tokens (fixed-workspace clients act in our own workspace and keep today's rule).
+            scopes = set(cap_scopes(workspace, audience, sorted(scopes)))
         consume(client, assertion_claims)
         now = int(clock())
         claims: dict[str, Any] = {

@@ -68,6 +68,7 @@ ERRORS: dict[str, tuple[int, str]] = {
     "invalid_role": (400, "invalid_role"),
     "invalid_roles": (400, "invalid_role"),
     "invalid_status": (400, "invalid_request"),
+    "invalid_request": (400, "invalid_request"),
     "installation_fixed": (400, "installation_fixed"),
     "invalid_client": (400, "invalid_client"),
 }
@@ -262,7 +263,8 @@ def register(app: FastAPI, *, config: TenancyConfig, connection: Callable[[], Ab
         installs = [installation_client(clients[c], scope_permissions)
                     for c in config.default_installs.get(body.product, ()) if c in clients]
         roles = {name: list(perms) for name, perms in config.role_templates[body.product].items()}
-        out = call("tenancy_signup", who.subject, _mac(config.invite_key, "subject", who.subject), who.name,
+        # The HMAC under every live key, current first, so a key rotation keeps sign-up idempotent.
+        out = call("tenancy_signup", who.subject, [_mac(k, "subject", who.subject) for k in keys], who.name,
                    body.product, body.slug, body.name, config.max_owned_workspaces, Jsonb(roles), Jsonb(installs))
         log.info("signup product=%s created=%s", body.product, out["created"])
         return JSONResponse(out, status_code=201 if out["created"] else 200, headers={"Cache-Control": "no-store"})
