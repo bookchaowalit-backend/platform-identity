@@ -32,6 +32,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg.rows import DictRow, dict_row
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
 from platform_identity.config import (
@@ -423,8 +424,9 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                                 status_code=400, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
 
-    @app.exception_handler(HTTPException)
-    def http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    # Starlette's base class, so errors raised before the route runs (a form that cannot be parsed) come here too.
+    @app.exception_handler(StarletteHTTPException)
+    def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # Token endpoint errors use the OAuth shape; everything else keeps the platform's {"detail": ...}.
         detail = exc.detail
         if isinstance(detail, dict) and "error_description" in detail:
@@ -434,6 +436,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                 failures.emit(status=exc.status_code, error=str(detail.get("error")), grant_type=grant,
                               client_id=claimed, assertion=assertion)
             return JSONResponse(detail, status_code=exc.status_code, headers=exc.headers)
+        if request.url.path == "/v1/token":  # refused before the route ran: the form itself was unreadable
+            failures.emit(status=exc.status_code, error="invalid_request", grant_type=None)
         return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=exc.headers)
 
     return app

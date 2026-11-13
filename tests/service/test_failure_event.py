@@ -78,6 +78,25 @@ class FailureEventTest(ServiceClientTest):
         self.assertEqual(response.status_code, 400)
         self.assertEqual((malformed[0]["reason"], malformed[0]["grant_type"]), ("invalid_request", "other"))
 
+    def test_a_form_that_cannot_be_parsed_is_reported(self) -> None:  # review on 6bac1f6
+        response, events = self.lines(lambda: self.client.post(
+            "/v1/token", content=b"x", headers={"Content-Type": "multipart/form-data"}))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual((events[0]["reason"], events[0]["grant_type"]), ("invalid_request", "other"))
+        self.assertIn("detail", response.json())  # the answer itself is unchanged
+
+    def test_a_token_exchange_never_carries_a_client_hash(self) -> None:  # review on 6bac1f6
+        form = {"grant_type": "urn:ietf:params:oauth:grant-type:token-exchange", "audience": "tasks-api",
+                "subject_token": "not-a-jwt", "subject_token_type": "urn:ietf:params:oauth:token-type:id_token",
+                "workspace": str(self.ws), "client_id": "ai-gateway", "client_assertion": self.assertion()}
+        _, events = self.lines(lambda: self.client.post("/v1/token", data=form))
+        self.assertEqual(events[0]["client_hash"], "")
+
+    def test_other_paths_keep_their_errors_and_log_nothing(self) -> None:
+        response, events = self.lines(lambda: self.client.get("/no-such-path"))
+        self.assertEqual((response.status_code, response.json()), (404, {"detail": "Not Found"}))
+        self.assertEqual(events, [])
+
     def test_an_issued_token_logs_no_failure(self) -> None:
         response, events = self.lines(lambda: self.request())
         self.assertEqual(response.status_code, 200)

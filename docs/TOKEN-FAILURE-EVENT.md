@@ -34,8 +34,9 @@ client as new for one alert.
 ## How
 
 `/v1/token` stores `(grant_type, client_id, client_assertion)` on `request.state`; the shared
-HTTPException handler emits the line for `/v1/token` errors in the OAuth shape, and the validation
-handler emits `invalid_request`. Nothing changes in any answer, and a failing stdout write is ignored.
+Starlette HTTPException handler emits the line for `/v1/token` errors in the OAuth shape and `invalid_request` for a
+form that could not be parsed before the route ran (review on 6bac1f6); the validation handler emits `invalid_request`.
+A client hash is computed only for `client_credentials`: with any other grant a `client_id` authenticates nobody. Nothing changes in any answer, and a failing stdout write is ignored.
 
 ## Tests
 

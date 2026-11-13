@@ -57,7 +57,8 @@ class FailureEvents:
              assertion: str | None = None) -> None:
         if not 400 <= status < 500 or error not in REASONS:
             return
-        client = self.client_of(client_id, assertion)
+        # Only client_credentials authenticates a client; a client_id sent with another grant names nobody.
+        client = self.client_of(client_id, assertion) if grant_type == "client_credentials" else None
         client_hash = (hmac.new(self.key, client.encode(), hashlib.sha256).hexdigest()[:16]
                        if client is not None and self.key else "")
         line = {"event": EVENT, "level": "warning", "grant_type": GRANTS.get(grant_type or "", "other"),
