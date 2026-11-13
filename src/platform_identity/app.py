@@ -33,6 +33,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from psycopg.rows import DictRow, dict_row
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from platform_identity.auth import Principal, TokenVerifier, Unauthenticated
 from platform_identity.config import (
@@ -40,6 +41,7 @@ from platform_identity.config import (
     validate_shared_scope_permissions,
 )
 from platform_identity.entitlement import Entitlement, finance_lookup
+from platform_identity.failure_event import FailureEvents, hash_key_from
 from platform_identity.google import InvalidIdToken
 from platform_identity.keys import SigningKey
 from platform_identity.rate_limit import RateLimitUnavailable
@@ -151,7 +153,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                cell_audiences: frozenset[str] = frozenset(),
                audience_bundles: Mapping[str, frozenset[str]] | None = None,
                bundle_token_ttl: int = BUNDLE_TOKEN_TTL_SECONDS,
-               entitlement: Entitlement | None = None,
+               entitlement: Entitlement | None = None, failure_hash_key: bytes | None = None,
                tenancy: TenancyConfig | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
@@ -190,6 +192,7 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         if key not in paid_ceiling and any(m in paid_ceiling for m in members):
             raise ValueError(f'bundle {key} carries a paid audience but has no entitlement ceiling')
     replays = ReplayCache(clock=clock)
+    failures = FailureEvents(failure_hash_key, clients)  # SPEC-007
     assertion_audiences = [f"{issuer}/v1/token", issuer]
 
     @asynccontextmanager
@@ -322,6 +325,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         client_assertion: Annotated[str | None, Form(max_length=8192)] = None,
         client_id: Annotated[str | None, Form(max_length=64)] = None,
     ) -> JSONResponse:
+        # SPEC-007: what the refusal handler may log; never the tokens themselves.
+        request.state.token_failure = (grant_type, client_id, client_assertion)
         try:
             allowed = limiter.allow(client_address(request,trusted_proxies=trusted_proxies))
         except RateLimitUnavailable:
@@ -550,6 +555,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # The token endpoint answers in the OAuth shape and never echoes the submitted subject token.
+        if request.url.path == "/v1/token":
+            failures.emit(status=400, error="invalid_request", grant_type=None)
         if request.url.path == "/v1/token" or request.url.path.startswith(("/v1/signup", "/v1/me/", "/v1/invitations",
                                                                           "/v1/members", "/v1/workspace",
                                                                           "/v1/installations", "/v1/service/")):
@@ -557,12 +564,20 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                                 status_code=400, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
 
-    @app.exception_handler(HTTPException)
-    def http_error(_: Request, exc: HTTPException) -> JSONResponse:
+    # Starlette's base class, so errors raised before the route runs (a form that cannot be parsed) come here too.
+    @app.exception_handler(StarletteHTTPException)
+    def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         # Token endpoint errors use the OAuth shape; everything else keeps the platform's {"detail": ...}.
         detail = exc.detail
         if isinstance(detail, dict) and "error_description" in detail:
+            context = getattr(request.state, "token_failure", None)
+            if request.url.path == "/v1/token" and context is not None:
+                grant, claimed, assertion = context
+                failures.emit(status=exc.status_code, error=str(detail.get("error")), grant_type=grant,
+                              client_id=claimed, assertion=assertion)
             return JSONResponse(detail, status_code=exc.status_code, headers=exc.headers)
+        if request.url.path == "/v1/token":  # refused before the route ran: the form itself was unreadable
+            failures.emit(status=exc.status_code, error="invalid_request", grant_type=None)
         return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=exc.headers)
 
     return app
@@ -611,6 +626,7 @@ def main() -> None:
             config.entitlement_mode, config.entitlement_ceilings,
             finance_lookup(str(config.entitlement_url), cast(uuid.UUID, config.entitlement_subject),
                            SigningKey(config.signing_key_pem), config.issuer)),
+        failure_hash_key=hash_key_from(config.signing_key_pem),
     )
     # Preserve the socket peer; staged mode alone applies explicit proxy trust.
     uvicorn.run(app, host=config.host, port=config.port, proxy_headers=False,
