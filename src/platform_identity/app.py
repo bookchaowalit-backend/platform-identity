@@ -25,6 +25,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any, Literal, cast
 
+import jwt
 import psycopg
 from fastapi import FastAPI, Form, Header, HTTPException, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -53,6 +54,8 @@ from platform_identity.service_clients import (
     ServiceClient,
     verify_assertion,
 )
+from platform_identity.tenancy import IDENTITY_AUDIENCE, TenancyConfig, own_claims
+from platform_identity.tenancy import register as register_tenancy
 
 log = logging.getLogger("platform_identity")
 
@@ -65,6 +68,8 @@ ACCESS_TOKEN_TTL_SECONDS = 600
 BUNDLE_TOKEN_TTL_SECONDS = 300
 BUNDLE_TOKEN_TTL_RANGE = (60, ACCESS_TOKEN_TTL_SECONDS)
 TOKEN_REQUESTS_PER_MINUTE = 30
+REACTIVATION_SCOPE = "identity.workspace:admin"
+MAX_DELEGATION_HOPS = 3  # SPEC-006 AC-18: at most 3 client ids in ``via``
 Auth = Annotated[str | None, Header()]
 Channel = Annotated[str | None, Header(alias="x-empire-channel")]
 
@@ -148,7 +153,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                cell_audiences: frozenset[str] = frozenset(),
                audience_bundles: Mapping[str, frozenset[str]] | None = None,
                bundle_token_ttl: int = BUNDLE_TOKEN_TTL_SECONDS,
-               entitlement: Entitlement | None = None, failure_hash_key: bytes | None = None) -> FastAPI:
+               entitlement: Entitlement | None = None, failure_hash_key: bytes | None = None,
+               tenancy: TenancyConfig | None = None) -> FastAPI:
     if decide_mode not in ("shadow", "record"):
         raise ValueError("decide_mode must be shadow or record")
     if connect is None and connection_pool is None:
@@ -234,6 +240,22 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         except psycopg.Error:
             raise HTTPException(status_code=503, detail={"error": "unavailable"}) from None
 
+    def active(conn: psycopg.Connection[DictRow], identity: Any, workspace: uuid.UUID, *,
+               owner_reactivation: bool) -> str | None:
+        """The identity's kind when it may act in the workspace now (platform.tenancy_active), else None."""
+        state = conn.execute("SELECT platform.tenancy_active(%s, %s, %s) AS kind",
+                             (identity, workspace, owner_reactivation)).fetchone()
+        return state["kind"] if state else None
+
+    def authorized(conn: psycopg.Connection[DictRow], actor: uuid.UUID, workspace: uuid.UUID, scope: str) -> bool:
+        permission = scope_permissions.get(scope, scope)
+        decision = conn.execute(
+            "SELECT decision, reason, decision_id FROM platform.authorize("
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (actor, workspace, permission, 'shared-infra', scope, workspace, None, None, None, 'api', False),
+        ).fetchone()
+        return decision is not None and decision['decision'] == 'allow'
+
     @app.get('/readyz', include_in_schema=False)
     def readyz():
         try:
@@ -312,7 +334,12 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
         if not allowed:
             raise _token_error(429, "slow_down", "too many token requests")
         if grant_type == CLIENT_CREDENTIALS and clients:
-            return service_token(audience, scope, client_assertion_type, client_assertion, client_id)
+            return service_token(audience, scope, client_assertion_type, client_assertion, client_id, workspace)
+        if grant_type == TOKEN_EXCHANGE and subject_token_type == ACCESS_TOKEN_TYPE and clients:
+            if subject_token is None:
+                raise _token_error(400, "invalid_request", "missing or malformed parameter")
+            return delegated_token(audience, scope, subject_token, client_assertion_type, client_assertion,
+                                   client_id)
         if grant_type != TOKEN_EXCHANGE:
             raise _token_error(400, "unsupported_grant_type", "only token exchange and client credentials are supported")
         if subject_token is None or workspace is None:
@@ -332,6 +359,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             external_subject = google.external_subject(subject_token)
         except InvalidIdToken as exc:
             raise _token_error(400, "invalid_grant", "the subject token is not valid") from exc
+        # SPEC-006 AC-12: the owner of a suspended workspace may get identity.workspace:admin alone, to reactivate it.
+        reactivation = set(scopes) == {REACTIVATION_SCOPE} and audience == IDENTITY_AUDIENCE
         with bound(workspace) as conn:
             row = conn.execute(
                 "SELECT i.id FROM platform.identities i"
@@ -339,37 +368,29 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                 " WHERE i.external_subject = %s AND i.status = 'active' AND m.status = 'active'",
                 (workspace, external_subject),
             ).fetchone()
+            # Without tenancy (migration 0009 not deployed) only shared scopes are checked, as before SPEC-006.
+            checked = sorted(set(scopes) & scope_permissions.keys())
+            if row is not None and tenancy is not None:
+                # AC-13: an active identity in an active workspace only; AC-15: every requested scope is checked.
+                checked = sorted(set(scopes))
+                if not active(conn, row["id"], workspace, owner_reactivation=False):
+                    if reactivation and active(conn, row["id"], workspace, owner_reactivation=True):
+                        checked = []  # platform.authorize refuses everything in a suspended workspace
+                    else:
+                        row = None
             if row is not None:
-                for shared_scope in sorted(set(scopes) & scope_permissions.keys()):
-                    decision = conn.execute(
-                        "SELECT decision, reason, decision_id FROM platform.authorize("
-                        "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                        (row['id'],workspace,scope_permissions[shared_scope],'shared-infra',shared_scope,
-                         workspace,None,None,None,'api',False),
-                    ).fetchone()
-                    if not decision or decision['decision'] != 'allow':
+                for requested in checked:
+                    if not authorized(conn, row["id"], workspace, requested):
                         raise _token_error(403,'invalid_scope','requested scope is not authorized')
         if row is None:
             # Same answer for an unknown person and a non-member, so membership does not leak.
             raise _token_error(400, "invalid_grant", "no active membership for this subject")
-        granted = sorted(set(scopes))
-        if entitlement is not None and entitlement.mode != "off" and audience in paid_ceiling:
-            paid = entitlement.active(workspace)
-            if paid is None:
-                log.warning("entitlement unknown audience=%s; token issued (fail open)", audience)
-            elif not paid:
-                log.info("pass missing audience=%s mode=%s", audience, entitlement.mode)
-                if entitlement.mode == "enforce":
-                    ceiling = paid_ceiling[audience]
-                    granted = sorted(set(scopes) & ceiling) if scopes else sorted(ceiling)
-                    if not granted:
-                        raise _token_error(400, "invalid_scope", "pass_required")
+        granted = cap_scopes(workspace, audience, sorted(set(scopes)))
         now = int(clock())
         ttl = bundle_token_ttl if audience in bundles else ACCESS_TOKEN_TTL_SECONDS
         claims: dict[str, Any] = {
             "iss": issuer,
-            "aud": ([audience, *sorted(bundles[audience])] if audience in bundles
-                    else [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience),
+            "aud": audience_claim(audience),
             "sub": str(row["id"]), "ws": str(workspace),
             "iat": now, "exp": now + ttl, "jti": str(uuid.uuid4()),
         }
@@ -383,8 +404,8 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "expires_in": ttl,
         }, headers={"Cache-Control": "no-store"})
 
-    def service_token(audience: str, scope: str | None, assertion_type: str | None, assertion: str | None,
-                      client_id: str | None) -> JSONResponse:
+    def authenticate(assertion_type: str | None, assertion: str | None,
+                     client_id: str | None) -> tuple[ServiceClient, dict[str, Any]]:
         if assertion_type != ASSERTION_TYPE or not assertion:
             raise _token_error(400, "invalid_request", "a jwt-bearer client assertion is required")
         try:
@@ -393,18 +414,126 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                 raise InvalidClient()
         except InvalidClient:
             raise _token_error(401, "invalid_client", "client authentication failed") from None
+        return client, assertion_claims
+
+    def consume(client: ServiceClient, assertion_claims: dict[str, Any]) -> None:
+        # Consume the jti last, so a request refused earlier does not burn a valid assertion.
+        if not replays.use(client.client_id, assertion_claims["jti"],
+                           expires_at=assertion_claims["exp"] + ASSERTION_LEEWAY_SECONDS):
+            raise _token_error(401, "invalid_client", "client authentication failed")
+
+    def audience_claim(audience: str) -> str | list[str]:
+        return ([audience, *sorted(bundles[audience])] if audience in bundles
+                else [audience, PLATFORM_AUDIENCE] if audience in cell_audiences else audience)
+
+    def cap_scopes(workspace: uuid.UUID, audience: str, scopes: list[str]) -> list[str]:
+        """SPEC-005: without a current pass a paid audience keeps only its ceiling (enforce mode)."""
+        if entitlement is None or entitlement.mode == "off" or audience not in paid_ceiling:
+            return scopes
+        paid = entitlement.active(workspace)
+        if paid is None:
+            log.warning("entitlement unknown audience=%s; token issued (fail open)", audience)
+            return scopes
+        if paid:
+            return scopes
+        log.info("pass missing audience=%s mode=%s", audience, entitlement.mode)
+        if entitlement.mode != "enforce":
+            return scopes
+        kept = sorted(set(scopes) & paid_ceiling[audience]) if scopes else sorted(paid_ceiling[audience])
+        if not kept:
+            raise _token_error(400, "invalid_scope", "pass_required")
+        return kept
+
+    def delegated_token(audience: str, scope: str | None, subject_token: str, assertion_type: str | None,
+                        assertion: str | None, client_id: str | None) -> JSONResponse:
+        """SPEC-006 AC-16..AC-18: an installed client exchanges a person-origin token it received."""
+        client, assertion_claims = authenticate(assertion_type, assertion, client_id)
+        if client.delegate_from is None or tenancy is None:
+            raise _token_error(400, "unauthorized_client", "this client may not delegate")
+        if (audience not in client.audiences or audience == IDENTITY_AUDIENCE or audience in bundles
+                or audience not in token_audiences):
+            raise _token_error(400, "invalid_target", "audience is not available")
+        try:
+            subject = own_claims(subject_token, signing_key, issuer)
+            workspace = uuid.UUID(subject["ws"])
+        except (jwt.PyJWTError, ValueError, TypeError, KeyError):
+            raise _token_error(400, "invalid_grant", "the subject token is not valid") from None
+        subject_aud = subject["aud"] if isinstance(subject["aud"], list) else [subject["aud"]]
+        via = subject.get("via", [])
+        act = subject.get("act")
+        if (client.delegate_from not in subject_aud or "client_id" in subject or "del" in subject
+                or not isinstance(via, list) or (act is None) != (not via)
+                or (act is not None and not isinstance(act, dict))):
+            raise _token_error(400, "invalid_grant", "the subject token cannot be delegated")
+        if len(via) + 1 > MAX_DELEGATION_HOPS:
+            raise _token_error(400, "invalid_grant", "the delegation chain is too long")
+        try:
+            initiator = uuid.UUID(act["sub"] if act is not None else subject["sub"])
+        except (ValueError, TypeError, KeyError):
+            raise _token_error(400, "invalid_grant", "the subject token cannot be delegated") from None
+        requested = sorted(set(scope.split())) if scope else []
+        held = set(str(subject.get("scope", "")).split())
+        if (not requested or len(requested) > 32 or not held or not set(requested) <= held
+                or not set(requested) <= client.delegable_scopes):
+            raise _token_error(400, "invalid_scope", "delegation can only narrow the subject token's scope")
+        with bound(workspace) as conn:
+            if (active(conn, initiator, workspace, owner_reactivation=False) != "human"
+                    or active(conn, client.subject, workspace, owner_reactivation=False) != "service_account"):
+                raise _token_error(400, "invalid_grant", "no active installation or initiator in this workspace")
+            for requested_scope in requested:
+                if not (authorized(conn, initiator, workspace, requested_scope)
+                        and authorized(conn, client.subject, workspace, requested_scope)):
+                    raise _token_error(403, "invalid_scope", "requested scope is not authorized")
+        granted = cap_scopes(workspace, audience, requested)
+        consume(client, assertion_claims)
+        now = int(clock())
+        expires = min(now + ACCESS_TOKEN_TTL_SECONDS, int(subject["exp"]))
+        claims: dict[str, Any] = {
+            "iss": issuer, "aud": audience_claim(audience), "sub": str(client.subject), "ws": str(workspace),
+            "act": {"sub": str(initiator)}, "via": [*via, client.client_id], "scope": " ".join(granted),
+            "iat": now, "exp": expires, "jti": str(uuid.uuid4()),
+        }
+        log.info("delegation issued client=%s audience=%s hops=%d", client.client_id, audience, len(via) + 1)
+        return JSONResponse({
+            "access_token": signing_key.sign(claims),
+            "issued_token_type": ACCESS_TOKEN_TYPE,
+            "token_type": "Bearer",
+            "expires_in": max(expires - now, 0),
+        }, headers={"Cache-Control": "no-store"})
+
+    def service_token(audience: str, scope: str | None, assertion_type: str | None, assertion: str | None,
+                      client_id: str | None, workspace: uuid.UUID | None = None) -> JSONResponse:
+        client, assertion_claims = authenticate(assertion_type, assertion, client_id)
         if audience not in client.audiences:
             raise _token_error(400, "invalid_target", "audience is not available")
         scopes = set(scope.split()) if scope else set(client.scopes)
         if not scopes or len(scopes) > 32 or not scopes <= client.scopes:
             raise _token_error(400, "invalid_scope", "scope is not registered for this client")
-        # Consume the jti last, so a request refused above does not burn a valid assertion.
-        if not replays.use(client.client_id, assertion_claims["jti"],
-                           expires_at=assertion_claims["exp"] + ASSERTION_LEEWAY_SECONDS):
-            raise _token_error(401, "invalid_client", "client authentication failed")
+        if client.workspace is not None:
+            # A fixed-workspace client may repeat its own workspace; another one is an error (SPEC-006 AC-22).
+            if workspace is not None and workspace != client.workspace:
+                raise _token_error(400, "invalid_request", "this client acts in its registered workspace only")
+            token_workspace = client.workspace
+        else:
+            # AC-20: a "*" client names the workspace, which must have installed it.
+            if workspace is None:
+                raise _token_error(400, "invalid_request", "workspace is required for this client")
+            if tenancy is None:
+                raise _token_error(400, "invalid_grant", "no installation in this workspace")
+            with bound(workspace) as conn:
+                if active(conn, client.subject, workspace, owner_reactivation=False) != "service_account":
+                    raise _token_error(400, "invalid_grant", "no installation in this workspace")
+                for requested_scope in sorted(scopes):
+                    if not authorized(conn, client.subject, workspace, requested_scope):
+                        raise _token_error(403, "invalid_scope", "requested scope is not authorized")
+            token_workspace = workspace
+            # A "*" client acts for one customer workspace, so SPEC-005's paid-audience ceiling applies as for
+            # person and delegated tokens (fixed-workspace clients act in our own workspace and keep today's rule).
+            scopes = set(cap_scopes(workspace, audience, sorted(scopes)))
+        consume(client, assertion_claims)
         now = int(clock())
         claims: dict[str, Any] = {
-            "iss": issuer, "aud": audience, "sub": str(client.subject), "ws": str(client.workspace),
+            "iss": issuer, "aud": audience, "sub": str(client.subject), "ws": str(token_workspace),
             "iat": now, "exp": now + ACCESS_TOKEN_TTL_SECONDS, "jti": str(uuid.uuid4()),
             "scope": " ".join(sorted(scopes)), "client_id": client.client_id,
         }
@@ -415,11 +544,22 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
             "expires_in": ACCESS_TOKEN_TTL_SECONDS,
         }, headers={"Cache-Control": "no-store"})
 
+    if tenancy is not None:
+        if IDENTITY_AUDIENCE not in token_audiences or IDENTITY_AUDIENCE in cell_audiences or IDENTITY_AUDIENCE in bundles:
+            raise ValueError('tenancy needs identity-api as a plain token audience')
+        register_tenancy(app, config=tenancy, connection=connection, google=google, signing_key=signing_key,
+                         issuer=issuer, clients=clients, scope_permissions=scope_permissions, limiter=limiter,
+                         address=lambda request: client_address(request, trusted_proxies=trusted_proxies),
+                         replays=replays, assertion_audiences=assertion_audiences, clock=clock)
+
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
         # The token endpoint answers in the OAuth shape and never echoes the submitted subject token.
         if request.url.path == "/v1/token":
             failures.emit(status=400, error="invalid_request", grant_type=None)
+        if request.url.path == "/v1/token" or request.url.path.startswith(("/v1/signup", "/v1/me/", "/v1/invitations",
+                                                                          "/v1/members", "/v1/workspace",
+                                                                          "/v1/installations", "/v1/service/")):
             return JSONResponse({"error": "invalid_request", "error_description": "missing or malformed parameter"},
                                 status_code=400, headers={"Cache-Control": "no-store"})
         return await request_validation_exception_handler(request, exc)
@@ -481,6 +621,7 @@ def main() -> None:
         audience_bundles=config.audience_bundles,
         bundle_token_ttl=config.bundle_token_ttl,
         decide_mode=config.decide_mode,
+        tenancy=config.tenancy,
         entitlement=None if config.entitlement_mode == "off" else Entitlement(
             config.entitlement_mode, config.entitlement_ceilings,
             finance_lookup(str(config.entitlement_url), cast(uuid.UUID, config.entitlement_subject),

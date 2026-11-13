@@ -17,6 +17,17 @@
                                docs/SERVICE-CLIENTS.md)
 ``IDENTITY_DECIDE_MODE``       ``shadow`` (default: decide, record nothing) or
                                ``record`` (record like the platform does)
+``IDENTITY_TENANCY_MODE``      ``off`` (default) or ``on``: SPEC-006 sign-up, members,
+                               delegation and "*" clients; needs platform-empire 0009
+``IDENTITY_INVITE_KEY``        HMAC key for invitation codes, emails, subjects (secret,
+                               ≥ 32 chars); ``_PREVIOUS`` is also tried during rotation
+``IDENTITY_SIGNUP_PRODUCTS``   products open for sign-up (empty = sign-up off)
+``IDENTITY_SIGNUP_MODE``       ``closed`` (default), ``invite_code`` or ``open``
+``IDENTITY_SIGNUP_CODES_SHA256``  SHA-256 hex of each sign-up code (``invite_code``)
+``IDENTITY_SIGNUP_PER_HOUR``   global sign-up budget per hour (default 20)
+``IDENTITY_MAX_OWNED_WORKSPACES``  workspaces one person may own (default 3)
+``IDENTITY_ROLE_TEMPLATES_JSON``   ``{product: {role: [permissions]}}`` with an owner role
+``IDENTITY_DEFAULT_INSTALLS``  ``{product: ["*" client ids]}`` installed at sign-up
 =============================  =================================================
 """
 
@@ -40,6 +51,7 @@ from platform_identity.auth import (
 )
 from platform_identity.keys import require_https
 from platform_identity.service_clients import ServiceClient, parse_service_clients
+from platform_identity.tenancy import TenancyConfig
 
 DECIDE_MODES = ("shadow", "record")
 MAX_BUNDLE = 16
@@ -134,6 +146,9 @@ class Config:
     entitlement_url: str | None = None
     entitlement_subject: uuid.UUID | None = None
     entitlement_ceilings: Mapping[str, frozenset[str]] = field(default_factory=lambda: MappingProxyType({}))
+    # SPEC-006 tenancy (sign-up, members, delegation, "*" clients): None until IDENTITY_TENANCY_MODE=on, which also
+    # needs platform-empire migration 0009 in the database.
+    tenancy: TenancyConfig | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> Config:
@@ -255,7 +270,11 @@ class Config:
         if any(s not in scope_mapping and not _CANONICAL.fullmatch(s)
                for c in service_clients.values() for s in c.scopes):
             raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON scopes must be mapped shared scopes or canonical permissions')
+        if any(c.delegable_scopes and c.delegate_from not in audiences for c in service_clients.values()):
+            raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON delegate_from must be an issuable audience')
+        tenancy = parse_tenancy(env, service_clients, audiences, cells, bundles)
         return cls(
+            tenancy=tenancy,
             service_clients=MappingProxyType(service_clients),
             shared_scope_permissions=MappingProxyType(scope_mapping),
             rate_limit_mode=rate_mode,
@@ -289,3 +308,69 @@ class Config:
             host=env.get("HOST", "0.0.0.0"),
             port=int(env.get("PORT", "8080")),
         )
+
+
+def parse_tenancy(env: Mapping[str, str], clients: Mapping[str, ServiceClient], audiences: frozenset[str],
+                  cells: frozenset[str], bundles: Mapping[str, frozenset[str]]) -> TenancyConfig | None:
+    """SPEC-006 settings; every value is checked here so a bad one stops identity from starting."""
+    mode = env.get("IDENTITY_TENANCY_MODE", "off").strip() or "off"
+    if mode not in ("off", "on"):
+        raise ConfigError("IDENTITY_TENANCY_MODE must be off or on")
+    if mode == "off":
+        if any(c.workspace is None for c in clients.values()):
+            raise ConfigError('IDENTITY_SERVICE_CLIENTS_JSON "*" clients need IDENTITY_TENANCY_MODE=on')
+        return None
+    if "identity-api" not in audiences or "identity-api" in cells or "identity-api" in bundles:
+        raise ConfigError("IDENTITY_TENANCY_MODE=on needs identity-api in IDENTITY_TOKEN_AUDIENCES (not a cell or bundle)")
+    key = env.get("IDENTITY_INVITE_KEY", "").strip()
+    previous = env.get("IDENTITY_INVITE_KEY_PREVIOUS", "").strip()
+    if len(key) < 32 or (previous and len(previous) < 32):
+        raise ConfigError("IDENTITY_INVITE_KEY (and _PREVIOUS when set) must be at least 32 characters")
+    products = frozenset(p.strip() for p in env.get("IDENTITY_SIGNUP_PRODUCTS", "").split(",") if p.strip())
+    hashes = frozenset(h.strip().lower() for h in env.get("IDENTITY_SIGNUP_CODES_SHA256", "").split(",") if h.strip())
+    if any(not re.fullmatch(r"[0-9a-f]{64}", h) for h in hashes):
+        raise ConfigError("IDENTITY_SIGNUP_CODES_SHA256 must list SHA-256 hex digests")
+    try:
+        templates_raw = json.loads(env.get("IDENTITY_ROLE_TEMPLATES_JSON", "") or "{}", object_pairs_hook=_unique_pairs)
+        installs_raw = json.loads(env.get("IDENTITY_DEFAULT_INSTALLS", "") or "{}", object_pairs_hook=_unique_pairs)
+        if not isinstance(templates_raw, dict) or not isinstance(installs_raw, dict):
+            raise ValueError()
+        templates: dict[str, dict[str, tuple[str, ...]]] = {}
+        for product, roles in templates_raw.items():
+            if not re.fullmatch(r"[a-z][a-z0-9-]{1,31}", product) or not isinstance(roles, dict) or "owner" not in roles:
+                raise ValueError()
+            templates[product] = {}
+            for role, perms in roles.items():
+                if (not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", role) or not isinstance(perms, list)
+                        or not 0 < len(perms) <= 256 or any(not isinstance(p, str) or not _CANONICAL.fullmatch(p)
+                                                            for p in perms)):
+                    raise ValueError()
+                templates[product][role] = tuple(perms)
+        installs: dict[str, tuple[str, ...]] = {}
+        for product, ids in installs_raw.items():
+            if not isinstance(ids, list) or any(i not in clients or clients[i].workspace is not None
+                                                or product not in clients[i].products for i in ids):
+                raise ValueError()
+            installs[product] = tuple(ids)
+    except (TypeError, ValueError, RecursionError):
+        raise ConfigError("IDENTITY_ROLE_TEMPLATES_JSON / IDENTITY_DEFAULT_INSTALLS are invalid (product → role →"
+                          " canonical permissions with an owner role; product → \"*\" clients registered for it)") from None
+
+    def integer(name: str, default: int, minimum: int, maximum: int) -> int:
+        try:
+            number = int(env.get(name, str(default)))
+        except ValueError:
+            raise ConfigError(f"{name} must be an integer") from None
+        if not minimum <= number <= maximum:
+            raise ConfigError(f"{name} is out of range")
+        return number
+
+    try:
+        return TenancyConfig(
+            invite_key=key.encode(), invite_key_previous=previous.encode() if previous else None,
+            signup_products=products, signup_mode=env.get("IDENTITY_SIGNUP_MODE", "closed").strip() or "closed",
+            signup_code_hashes=hashes, signup_per_hour=integer("IDENTITY_SIGNUP_PER_HOUR", 20, 1, 10_000),
+            max_owned_workspaces=integer("IDENTITY_MAX_OWNED_WORKSPACES", 3, 1, 100),
+            role_templates=MappingProxyType(templates), default_installs=MappingProxyType(installs))
+    except ValueError as exc:
+        raise ConfigError(f"tenancy settings: {exc}") from None

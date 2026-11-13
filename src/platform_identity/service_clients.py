@@ -32,6 +32,12 @@ AUDIENCE = re.compile(r"[a-z][a-z0-9-]{1,62}")
 # A concrete shared scope (``quotas:service``) or a canonical permission; both pass core's scope check.
 SCOPE = re.compile(r"[a-z][a-z0-9_.-]{0,63}:[a-z][a-z0-9_.-]{0,63}")
 FIELDS = frozenset({"subject", "workspace", "audiences", "scopes", "public_key_pem"})
+# SPEC-006: optional keys. ``workspace: "*"`` makes a multi-workspace client that needs an installation per
+# workspace; ``delegate_from`` (its own audience) and ``delegable_scopes`` (⊆ scopes) let it exchange a token it
+# received for one to the next service; ``products`` lists where an admin may install it.
+OPTIONAL_FIELDS = frozenset({"delegate_from", "delegable_scopes", "products"})
+ANY_WORKSPACE = "*"
+PRODUCT = re.compile(r"[a-z][a-z0-9-]{1,31}")
 
 
 class InvalidClient(Exception):
@@ -42,10 +48,13 @@ class InvalidClient(Exception):
 class ServiceClient:
     client_id: str
     subject: uuid.UUID
-    workspace: uuid.UUID
+    workspace: uuid.UUID | None  # None = any workspace that installed it (SPEC-006 "*")
     audiences: frozenset[str]
     scopes: frozenset[str]
     public_key: rsa.RSAPublicKey = field(repr=False)
+    delegate_from: str | None = None
+    delegable_scopes: frozenset[str] = frozenset()
+    products: frozenset[str] = frozenset()
 
 
 def _unique_pairs(pairs: Iterable[tuple[str, Any]]) -> dict[str, Any]:
@@ -78,10 +87,12 @@ def parse_service_clients(raw: str) -> dict[str, ServiceClient]:
         raise ValueError(f"service client registry must be an object of at most {MAX_CLIENTS} clients")
     clients: dict[str, ServiceClient] = {}
     for client_id, entry in data.items():
-        if not CLIENT_ID.fullmatch(client_id) or not isinstance(entry, dict) or set(entry) != FIELDS:
+        if (not CLIENT_ID.fullmatch(client_id) or not isinstance(entry, dict) or not FIELDS <= set(entry)
+                or not set(entry) <= FIELDS | OPTIONAL_FIELDS):
             raise ValueError("invalid service client entry")
         try:
-            subject, workspace = uuid.UUID(entry["subject"]), uuid.UUID(entry["workspace"])
+            subject = uuid.UUID(entry["subject"])
+            workspace = None if entry["workspace"] == ANY_WORKSPACE else uuid.UUID(entry["workspace"])
             key = load_pem_public_key(entry["public_key_pem"].replace("\\n", "\n").encode())
         except (AttributeError, TypeError, ValueError):
             raise ValueError("invalid service client entry") from None
@@ -90,12 +101,25 @@ def parse_service_clients(raw: str) -> dict[str, ServiceClient]:
             raise ValueError("service client subject and workspace must be distinct, non-nil UUIDs")
         if not isinstance(key, rsa.RSAPublicKey) or key.key_size < 2048:
             raise ValueError("service client keys must be RSA public keys of at least 2048 bits")
+        scopes = _names(entry["scopes"], SCOPE, 32)
+        delegate_from = entry.get("delegate_from")
+        if delegate_from is not None and (not isinstance(delegate_from, str) or not AUDIENCE.fullmatch(delegate_from)):
+            raise ValueError("invalid service client entry")
+        delegable = _names(entry["delegable_scopes"], SCOPE, 32) if "delegable_scopes" in entry else frozenset()
+        if (delegable or delegate_from) and not (delegable and delegate_from and workspace is None):
+            raise ValueError("a delegating client needs workspace \"*\", delegate_from and delegable_scopes")
+        if not delegable <= scopes:
+            raise ValueError("delegable_scopes must be a subset of scopes")
+        products = _names(entry["products"], PRODUCT, 16) if "products" in entry else frozenset()
         clients[client_id] = ServiceClient(
             client_id=client_id, subject=subject, workspace=workspace,
-            audiences=_names(entry["audiences"], AUDIENCE, 16), scopes=_names(entry["scopes"], SCOPE, 32),
-            public_key=key)
+            audiences=_names(entry["audiences"], AUDIENCE, 16), scopes=scopes,
+            public_key=key, delegate_from=delegate_from, delegable_scopes=delegable, products=products)
     if len({c.subject for c in clients.values()}) != len(clients):
         raise ValueError("service clients must not share a subject")
+    froms = [c.delegate_from for c in clients.values() if c.delegate_from]
+    if len(froms) != len(set(froms)):
+        raise ValueError("two service clients must not delegate from the same audience")
     return clients
 
 
