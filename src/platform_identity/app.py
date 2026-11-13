@@ -485,8 +485,11 @@ def create_app(*, connect: Callable[[], psycopg.Connection] | None = None, platf
                         and authorized(conn, client.subject, workspace, requested_scope)):
                     raise _token_error(403, "invalid_scope", "requested scope is not authorized")
         granted = cap_scopes(workspace, audience, requested)
-        consume(client, assertion_claims)
         now = int(clock())
+        # The verifier allows clock leeway; a hop token must still have time left, checked before the assertion is spent.
+        if int(subject["exp"]) <= now:
+            raise _token_error(400, "invalid_grant", "the subject token has expired")
+        consume(client, assertion_claims)
         expires = min(now + ACCESS_TOKEN_TTL_SECONDS, int(subject["exp"]))
         claims: dict[str, Any] = {
             "iss": issuer, "aud": audience_claim(audience), "sub": str(client.subject), "ws": str(workspace),

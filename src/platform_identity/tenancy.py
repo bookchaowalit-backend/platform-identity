@@ -26,7 +26,7 @@ import psycopg
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from fastapi import FastAPI, Form, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -307,11 +307,11 @@ def register(app: FastAPI, *, config: TenancyConfig, connection: Callable[[], Ab
                             headers={"Cache-Control": "no-store"})
 
     @app.delete("/v1/invitations/{invitation_id}", tags=["tenancy"], status_code=204)
-    def revoke_invitation(invitation_id: uuid.UUID, request: Request, authorization: Auth = None) -> JSONResponse:
+    def revoke_invitation(invitation_id: uuid.UUID, request: Request, authorization: Auth = None) -> Response:
         admit(request)
         who = caller(authorization, "identity.member:admin")
         call("tenancy_revoke_invitation", who.identity, who.workspace, invitation_id)
-        return JSONResponse(None, status_code=204, headers={"Cache-Control": "no-store"})
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})  # 204 has no body
 
     @app.post("/v1/invitations/accept", tags=["tenancy"])
     def accept_invitation(body: AcceptBody, request: Request) -> JSONResponse:
@@ -346,11 +346,11 @@ def register(app: FastAPI, *, config: TenancyConfig, connection: Callable[[], Ab
         return JSONResponse({"identity_id": str(identity_id)}, headers={"Cache-Control": "no-store"})
 
     @app.delete("/v1/members/{identity_id}", tags=["tenancy"], status_code=204)
-    def remove_member(identity_id: uuid.UUID, request: Request, authorization: Auth = None) -> JSONResponse:
+    def remove_member(identity_id: uuid.UUID, request: Request, authorization: Auth = None) -> Response:
         admit(request)
         who = caller(authorization, "identity.member:admin")
         call("tenancy_remove_member", who.identity, who.workspace, identity_id)
-        return JSONResponse(None, status_code=204, headers={"Cache-Control": "no-store"})
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})  # 204 has no body
 
     @app.patch("/v1/workspace", tags=["tenancy"])
     def patch_workspace(body: WorkspacePatch, request: Request, authorization: Auth = None) -> JSONResponse:
