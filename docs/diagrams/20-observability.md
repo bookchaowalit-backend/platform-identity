@@ -6,6 +6,9 @@ flowchart LR
   API -->|"unhandled exceptions, capture(); before_send scrub; no tracing, no logs as events"| SEN["Sentry (SENTRY_DSN, tag service = RAILWAY_SERVICE_NAME, release = RAILWAY_GIT_COMMIT_SHA)"]
   API -->|"stdout logging INFO: token issued audience=..., service client admitted client=... audience=..."| LOG["Railway logs"]
   API -->|"stderr: sentry enabled for service"| LOG
+  API -->|"stdout JSON token.issue_failed per refused /v1/token (SPEC-007)"| LOG
+  SIG["platform-security-signals (every 15 min)"] -->|"reads token.issue_failed, rule SIG-06"| LOG
+  SIG -->|"opened/resolved"| TG
   UP["platform-uptime-worker"] -->|"GET /health"| API
   RW["Railway health check"] -->|"GET /health"| API
   EMP["platform-empire tasks-api"] -->|"logs identity_shadow outcome=match or mismatch"| ELOG["platform-empire logs"]
@@ -22,6 +25,7 @@ Sources: `src/platform_identity/_sentry.py`, `src/platform_identity/app.py` (`lo
 | Errors | Sentry | owner | no unresolved error before cutover |
 | Shadow parity | `identity_shadow outcome=` in platform-empire | nobody automatically ("no report yet") | 100% match over 14 days |
 | Token issuance volume | `token issued` / `service client admitted` log lines | not aggregated | — |
+| Refused token requests | `token.issue_failed` JSON lines ([SPEC-007](../TOKEN-FAILURE-EVENT.md)) | platform-security-signals SIG-06 (≥ 20 / 15 min, or a registered client failing for the first time in 30 days) | — |
 | Readiness | `/readyz` | manual after deploy | — |
 
 ไม่มี metrics endpoint, tracing หรือ heartbeat ใน repo นี้; log ไม่พิมพ์ token, subject หรือ workspace (มีเฉพาะ audience และ client id)
