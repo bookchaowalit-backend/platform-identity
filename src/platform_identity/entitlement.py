@@ -100,6 +100,19 @@ class Entitlement:
             return answer
 
 
+_PREFIX = re.compile(r"(?:/[A-Za-z0-9._~-]+)*")
+
+
+def valid_base_url(base_url: str) -> bool:
+    """An https origin, optionally with a plain path prefix such as the gateway's /v1/finance-api."""
+    parts = urlsplit(base_url)
+    path = parts.path.rstrip("/")
+    return (parts.scheme == "https" and bool(parts.hostname) and not parts.username and not parts.password
+            and not parts.query and not parts.fragment and "?" not in base_url and "#" not in base_url
+            and _PREFIX.fullmatch(path) is not None
+            and not any(seg in (".", "..") for seg in path.split("/")))
+
+
 def finance_lookup(
     base_url: str,
     subject: uuid.UUID,
@@ -109,9 +122,8 @@ def finance_lookup(
     transport: httpx.BaseTransport | None = None,
 ) -> Callable[[uuid.UUID], bool]:
     """Ask finance-api SPEC-006 with a 60-second token identity signs for itself."""
-    parts = urlsplit(base_url)
-    if parts.scheme != "https" or not parts.hostname or parts.username or parts.query:
-        raise ValueError("the entitlement URL must be a plain https origin")
+    if not valid_base_url(base_url):
+        raise ValueError("the entitlement URL must be an https origin with an optional plain path prefix")
     url = base_url.rstrip("/") + "/v1/internal/entitlement"
     client = httpx.Client(transport=transport, timeout=httpx.Timeout(TIMEOUT, connect=1.0), follow_redirects=False)
 

@@ -228,6 +228,31 @@ class FinanceLookupTest(Helpers):
         with self.assertRaises(ValueError):
             finance_lookup("http://finance.example", uuid.uuid4(), SigningKey(self.signing_private), ISSUER)
 
+    def test_a_gateway_path_prefix_is_kept(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"active": False})
+
+        for url in ("https://gateway.example/v1/finance-api", "https://gateway.example/v1/finance-api/"):
+            lookup = finance_lookup(url, uuid.uuid4(), SigningKey(self.signing_private), ISSUER,
+                                    transport=httpx.MockTransport(handler))
+            self.assertFalse(lookup(uuid.uuid4()))
+        self.assertEqual({str(r.url) for r in seen},
+                         {"https://gateway.example/v1/finance-api/v1/internal/entitlement"})
+
+    def test_only_plain_prefixes_are_accepted(self) -> None:
+        from platform_identity.entitlement import valid_base_url
+
+        for good in ("https://finance.example", "https://finance.example/", "https://gw.example/v1/finance-api"):
+            self.assertTrue(valid_base_url(good), good)
+        for bad in ("http://gw.example/v1/finance-api", "https://u@gw.example", "https://gw.example/v1?x=1",
+                    "https://gw.example/v1#f", "https://gw.example/v1/../admin", "https://gw.example/v1/./x",
+                    "https://gw.example//v1", "https://gw.example/v1/a b", "https://gw.example/%2e%2e",
+                    "https:///v1", "https://gw.example?"):
+            self.assertFalse(valid_base_url(bad), bad)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -252,10 +277,12 @@ class EntitlementConfigTest(unittest.TestCase):
         good = {**env, "IDENTITY_ENTITLEMENT_MODE": "enforce", "IDENTITY_ENTITLEMENT_URL": "https://finance.example",
                 "IDENTITY_ENTITLEMENT_SUBJECT": subject,
                 "IDENTITY_ENTITLEMENT_CEILINGS_JSON": _json.dumps({"finance-api": sorted(CEILING)})}
+        gateway = "https://gateway.example/v1/finance-api"
+        self.assertEqual(Config.from_env({**good, "IDENTITY_ENTITLEMENT_URL": gateway}).entitlement_url, gateway)
         cfg = Config.from_env(good)
         self.assertEqual((cfg.entitlement_mode, str(cfg.entitlement_subject)), ("enforce", subject))
         self.assertEqual(cfg.entitlement_ceilings["finance-api"], CEILING)
-        for name, value in (("IDENTITY_ENTITLEMENT_MODE", "on"), ("IDENTITY_ENTITLEMENT_URL", "http://x.example"),
+        for name, value in (("IDENTITY_ENTITLEMENT_MODE", "on"), ("IDENTITY_ENTITLEMENT_URL", "http://x.example"), ("IDENTITY_ENTITLEMENT_URL", "https://x.example/v1/../x"),
                             ("IDENTITY_ENTITLEMENT_SUBJECT", "nope"),
                             ("IDENTITY_ENTITLEMENT_CEILINGS_JSON", _json.dumps({"tax-api": ["tax.tax-item:read"]})),
                             ("IDENTITY_ENTITLEMENT_CEILINGS_JSON",

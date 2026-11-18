@@ -34,7 +34,7 @@ workspace, `scope finance-api.entitlement:read`, and sends it to `IDENTITY_ENTIT
 finance-api accepts that subject on that route only (`FINANCE_API_ENTITLEMENT_SUBJECT`).
 
 ## Configuration
-`IDENTITY_ENTITLEMENT_MODE` (`off` default), `IDENTITY_ENTITLEMENT_URL` (https origin),
+`IDENTITY_ENTITLEMENT_MODE` (`off` default), `IDENTITY_ENTITLEMENT_URL` (https origin, optionally with a plain path prefix such as `https://gateway.bookchaowalit.com/v1/finance-api`; production goes through the gateway so finance-api can enforce SPEC-002),
 `IDENTITY_ENTITLEMENT_SUBJECT` (UUID), `IDENTITY_ENTITLEMENT_CEILINGS_JSON` (`{"finance-api": [...]}`: bundle
 audiences only, 1–128 `:read`/`:delete` permissions). Invalid → identity does not start. Rollback: mode `off`.
 

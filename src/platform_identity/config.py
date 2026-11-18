@@ -42,13 +42,13 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from urllib.parse import urlsplit
 
 from platform_identity.auth import (
     HARD_MAX_LIFETIME_SECONDS,
     MAX_LIFETIME_SECONDS,
     PLATFORM_AUDIENCE,
 )
+from platform_identity.entitlement import valid_base_url
 from platform_identity.keys import require_https
 from platform_identity.service_clients import ServiceClient, parse_service_clients
 from platform_identity.tenancy import TenancyConfig
@@ -210,9 +210,8 @@ class Config:
         ent_url, ent_subject, ceilings = None, None, {}
         if ent_mode != "off":
             ent_url = env.get("IDENTITY_ENTITLEMENT_URL", "").strip()
-            parts = urlsplit(ent_url)
-            if parts.scheme != "https" or not parts.hostname or parts.username or parts.query:
-                raise ConfigError("IDENTITY_ENTITLEMENT_URL must be a plain https origin")
+            if not valid_base_url(ent_url):
+                raise ConfigError("IDENTITY_ENTITLEMENT_URL must be an https origin with an optional plain path prefix")
             try:
                 ent_subject = uuid.UUID(env.get("IDENTITY_ENTITLEMENT_SUBJECT", "").strip())
             except ValueError:
