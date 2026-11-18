@@ -37,6 +37,14 @@ class Misconfigured(Exception):
     """finance-api refused identity's own lookup (401/403/404): a configuration fault, not an outage."""
 
 
+class RateLimited(Exception):
+    """The gateway (or finance-api) answered 429: an answer was refused, so no pass is assumed.
+
+    Every lookup shares IDENTITY_ENTITLEMENT_SUBJECT, so it shares one gateway limit per subject. Failing open
+    here would hand write scopes to workspaces without a pass whenever that limit is reached.
+    """
+
+
 class Entitlement:
     """Mode, the scope ceiling per paid audience, and a cached ``lookup(workspace) -> bool``."""
 
@@ -91,6 +99,9 @@ class Entitlement:
                 log.error("entitlement lookup refused (%s): check FINANCE_API_ENTITLEMENT_SUBJECT; no pass assumed",
                           exc)
                 answer = False
+            except RateLimited as exc:
+                log.warning("entitlement rate limited (%s): no pass assumed", exc)
+                answer = False
             except Exception as exc:  # timeouts, connection errors, 5xx: cannot tell
                 log.warning("entitlement unknown reason=%s", type(exc).__name__)
                 answer = None
@@ -134,6 +145,8 @@ def finance_lookup(
             "iat": now, "exp": now + 60, "jti": str(uuid.uuid4()), "scope": SCOPE,
         }
         response = client.get(url, headers={"Authorization": f"Bearer {signing_key.sign(claims)}"})
+        if response.status_code == 429:
+            raise RateLimited("entitlement answered 429")
         if response.status_code in (401, 403, 404):
             raise Misconfigured(f"entitlement answered {response.status_code}")
         if response.status_code != 200:

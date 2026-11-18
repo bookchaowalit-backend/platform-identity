@@ -19,6 +19,7 @@ whether the workspace has a current pass before signing. A paid audience is the 
 | no pass | `scope` = the ceiling (∩ requested scopes; none left → 400 `invalid_scope` / `pass_required`) | as before, logs `pass missing` | not asked |
 | cannot tell (timeout, connection error, 5xx) | as before, logs `entitlement unknown` (fail open) | same | — |
 | finance-api refused the lookup (401/403/404: misconfiguration) | **ceiling**, logs an error | logs | — |
+| rate limited (429, e.g. the gateway's per-subject limit, shared by every lookup) | **ceiling** (cached 5 s), logs a warning | logs | — |
 
 The ceiling holds only `:read` and `:delete` permissions, so without a pass people can still read, export and erase
 their own data (PDPA), but write nothing. Answers are cached per workspace: 60 s (pass), 5 s (no pass), 15 s

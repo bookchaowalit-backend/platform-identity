@@ -123,6 +123,15 @@ class EntitlementTest(Helpers):
             claims = self.claims(self.exchange(self.id_token(), audience="finance-api"))
         self.assertEqual(set(claims["scope"].split()), CEILING)
 
+    def test_a_rate_limited_lookup_counts_as_no_pass(self) -> None:
+        """Review P2: a gateway 429 must not fail open and hand out write scopes."""
+        from platform_identity.entitlement import RateLimited
+
+        self.client = self.paid_client(answer=RateLimited("429"))
+        with self.assertLogs("platform_identity", logging.WARNING):
+            claims = self.claims(self.exchange(self.id_token(), audience="finance-api"))
+        self.assertEqual(set(claims["scope"].split()), CEILING)
+
     def test_workspaces_are_cached_apart(self) -> None:
         answers = {}
 
@@ -218,6 +227,14 @@ class FinanceLookupTest(Helpers):
                                     ISSUER, transport=httpx.MockTransport(lambda r, s=status: httpx.Response(s)))
             with self.subTest(status=status), self.assertRaises(Misconfigured):
                 lookup(uuid.uuid4())
+
+    def test_a_429_is_rate_limited(self) -> None:
+        from platform_identity.entitlement import RateLimited
+
+        lookup = finance_lookup("https://gateway.example/v1/finance-api", uuid.uuid4(), SigningKey(self.signing_private),
+                                ISSUER, transport=httpx.MockTransport(lambda r: httpx.Response(429)))
+        with self.assertRaises(RateLimited):
+            lookup(uuid.uuid4())
 
     def test_anything_but_a_clear_answer_raises(self) -> None:
         for response in (httpx.Response(503, json={}), httpx.Response(200, json={"active": "yes"})):
