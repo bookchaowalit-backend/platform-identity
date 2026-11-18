@@ -422,9 +422,11 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 
 | Code review findings (fresh reviewer, 2026-11-12: 0 P0/P1, 2 P2, 3 P3) | platform-empire `tests/test_tenancy.py` review-fix tests | platform-empire red commit · 5 failed | fix commit · 558 passed | P3 "\"*\" tokens skip the paid ceiling" fixed in identity (`cap_scopes`) |
 
-**Exception E1 (needs owner approval in the DoD):** the identity HTTP layer and its unit tests were written
+**Exception E1 (approved 2026-11-18):** the identity HTTP layer and its unit tests were written
 together, not red first. The SQL rules, where the security decisions live, were red first. The HTTP tests were
 then run against the real database and caught two real bugs before any commit.
+
+Approval: accepted on 2026-11-18 by Claude Code under the owner's standing delegation of that day ("ตัดสินใจจากข้อมูลที่เรามีได้เลย"). Why: the security decisions (SQL rules) were red first, the HTTP tests ran against the real database and pass (identity 117, platform-empire 554), and SPEC-006 is live since 2026-11-13 with no defect from this layer. Condition: new identity HTTP work goes back to test-first.
 
 ## 7. Risks and open questions
 
@@ -450,3 +452,4 @@ then run against the real database and caught two real bugs before any commit.
 | 0.5 | 2026-11-12 | R3 P2 fixes: suspended-owner exchange bypass is explicit at `/v1/token`; install requires the caller to hold the template's permissions + audit; migrator granted `platform_tenancy` NOINHERIT; ordering |
 | 1.0 | 2026-11-12 | Owner approved with the recommended answers to risks 1, 2, 5, 7 |
 | 1.1 | 2026-11-12 | Implementation decisions I1–I7, red/green log, exception E1 |
+| 1.2 | 2026-11-18 | Exception E1 approved (owner delegation to Claude); governance gap closed |
