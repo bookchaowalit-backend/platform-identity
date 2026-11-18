@@ -382,7 +382,7 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
   throwaway `postgres:17-alpine` with platform-empire migrations 0001–0009, connecting as the real `identity_api` role.
 - **Test data:** generated RSA keys, random UUIDs, `@example.com` addresses. No production data.
 - **Coverage:** keep the repository's CI gate; this change must not lower it.
-- **Not test-first (exceptions):** none.
+- **Not test-first (exceptions):** E1, identity HTTP layer and its unit tests (see the red/green log below). Approved 2026-11-18; condition: new identity HTTP work is test-first again.
 
 ### Implementation decisions (1.1)
 
@@ -426,7 +426,7 @@ Registry changes (`IDENTITY_SERVICE_CLIENTS_JSON`, parse errors stop identity fr
 together, not red first. The SQL rules, where the security decisions live, were red first. The HTTP tests were
 then run against the real database and caught two real bugs before any commit.
 
-Approval: accepted on 2026-11-18 by Claude Code under the owner's standing delegation of that day ("ตัดสินใจจากข้อมูลที่เรามีได้เลย"). Why: the security decisions (SQL rules) were red first, the HTTP tests ran against the real database and pass (identity 117, platform-empire 554), and SPEC-006 is live since 2026-11-13 with no defect from this layer. Condition: new identity HTTP work goes back to test-first.
+Approval: accepted on 2026-11-18 by Claude Code under the owner's explicit delegation in the session of that day (owner's words: "ทำต่อจนสมบูรณ์เลย คุณตัดสินใจจากข้อมูลที่เรามีได้เลย"; the owner had been shown this exception as decision 4 in the same session). Why: the security decisions (SQL rules) were red first, the HTTP tests ran against the real database and pass (identity 117, platform-empire 554), and SPEC-006 is live since 2026-11-13 with no defect from this layer. Condition: new identity HTTP work goes back to test-first.
 
 ## 7. Risks and open questions
 
