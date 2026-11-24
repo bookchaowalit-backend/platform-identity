@@ -10,7 +10,9 @@ Treat these as `[P0]`/`[P1]`:
 - **Scope or delegation widened** in token exchange, or the chain not re-checked
   (`docs/SPEC-006-TENANCY-AND-DELEGATION.md` AC-15, AC-17, AC-18).
 - **Cross-workspace access**, or not failing closed when `app.workspace_id` is unset (SPEC-006 AC-14).
-- **Tokens for an inactive workspace or identity** (SPEC-006 AC-13).
+- **Tokens for an inactive workspace or identity** (SPEC-006 AC-13). Exception (AC-12): an active
+  human owner of a **suspended** workspace may get `identity.workspace:admin` alone, audience
+  identity, to reactivate it (`app.py` `reactivation`). Widening that exception is the finding.
 - **Verification weakened** for Google id_tokens or platform JWTs: algorithms, audience, required
   claims (`google.py`, `auth.py`), or `private_key_jwt` client assertions.
 - **Rate limit failing open**, or trusting a spoofable `X-Forwarded-For` (`docs/SHARED-RATE-LIMIT.md`).
@@ -31,7 +33,10 @@ even where older docs say shadow: review it as production auth.
 
 ## Skip
 
-- `uv.lock`, `.venv/`, `build/`, `dist/`, `*.egg-info`, `*_cache/`, `DOCPACK/pdf/`.
+- `uv.lock` hashes and generated metadata. Still review changed versions and sources (a lock-only
+  bump is a real dependency change, e.g. `4d66aaa`) and the `platform-backend-core` git pin, which
+  must match `pyproject.toml`.
+- `.venv/`, `build/`, `dist/`, `*.egg-info`, `*_cache/`, `DOCPACK/pdf/`.
 - `schema/*.json` and its `.sha256` pin change only from the canonical copy: a hand edit is a finding.
 
 ## Evidence
