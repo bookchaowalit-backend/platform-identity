@@ -44,7 +44,7 @@ platform-identity คือ identity service ของ Book Platform (`identity-
 
 ## Findings worth the owner's attention
 
-- `IDENTITY_GOOGLE_CLIENT_IDS` ยังไม่ตั้ง: person token ทุกตัวถูกปฏิเสธ (01, 02)
+- `IDENTITY_GOOGLE_CLIENT_IDS` ตั้งแล้ว 2026-11-28 (client `finance-suite-web`): person path เปิด แต่ยังไม่ได้ทดสอบ login จริงบน production (01, 02)
 - Sentry ของ identity ยังใช้ regex scrub ที่ส่ง exception text (หลัง scrub); 8 platform services เปลี่ยนเป็น "no free text" แล้ว 2026-11-03 (13, 20)
 - uptime probe ใช้ `/health` ซึ่งตอบ 200 แม้ DB ล่ม (20, 21)
 - JWKS มี key เดียว ไม่มีโค้ดหมุน key; ไม่มี revocation (token ≤ 600 s) (11, 13)
