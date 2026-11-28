@@ -434,7 +434,7 @@ Approval: accepted on 2026-11-18 by Claude Code under the owner's explicit deleg
 |---|---|---|---|---|
 | 1 | Signup mode at launch: `closed`, `invite_code` (recommended) or `open`? | who can create a tenant | Owner | `invite_code` (owner 2026-11-12) |
 | 2 | Role templates per product. Proposal for `finance`: owner = the ten cells' read/write/delete + `finance-api` + the `identity.*` permissions; admin = owner minus `identity.workspace:admin`; member = cells' read/write | what a customer can do | Owner | as proposed (owner 2026-11-12) |
-| 3 | `IDENTITY_GOOGLE_CLIENT_IDS` still unset: no person token, signup or acceptance works in production | blocks go-live, not build | Owner | — |
+| 3 | `IDENTITY_GOOGLE_CLIENT_IDS` still unset: no person token, signup or acceptance works in production | blocks go-live, not build | Owner | set 2026-11-28 (client `finance-suite-web`, Infisical `/platform-identity`); end-to-end sign-in not yet tested |
 | 4 | Migration 0009 runs on the shared `empire` database; deploy goes through the Railway approval gate | shared DB change | Claude + owner | snapshot branch first |
 | 5 | Repo ownership: platform-identity / platform-empire were treated as owned by a "finance-suite peer" session; confirm this session may write to them | parallel edits | Owner | this session may write, on branches + PR; no deploy without a second approval (owner 2026-11-12) |
 | 6 | Revocation is by expiry (≤ 600 s; admin calls re-check, R-d) | short exposure of downstream hop tokens | Owner accepts | — |

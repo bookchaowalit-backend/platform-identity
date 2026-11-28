@@ -46,4 +46,4 @@ Sources: `src/platform_identity/keys.py` (`RemoteJwks`), `src/platform_identity/
 ## Open questions
 
 - ควรปิด `/openapi.json` (`openapi_url=None`) ให้ตรงกับเจตนาที่ปิด `/docs` หรือไม่
-- `/v1/token` person path ใช้ไม่ได้จนกว่า owner ตั้ง `IDENTITY_GOOGLE_CLIENT_IDS`
+- `/v1/token` person path เปิดแล้ว (`IDENTITY_GOOGLE_CLIENT_IDS` ตั้ง 2026-11-28, client `finance-suite-web`) แต่ยังไม่ได้ทดสอบ login จริงบน production

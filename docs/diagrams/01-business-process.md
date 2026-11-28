@@ -48,7 +48,7 @@ flowchart TD
 Sources: `src/platform_identity/app.py`, `src/platform_identity/tenancy.py`, `src/platform_identity/config.py`, `docs/SPEC-006-TENANCY-AND-DELEGATION.md`, `src/platform_identity/google.py`, `src/platform_identity/service_clients.py`, `README.md`, `PRODUCT.md`, `docs/PLATFORM-SERVICES-CUTOVER.md`, `docs/SERVICE-CLIENTS.md`, ops record: book-platforms-status (2026-11-03) ("Only open: owner `IDENTITY_GOOGLE_CLIENT_IDS`")
 
 ข้อสังเกต As-Is:
-- person path ยังปิดอยู่จริงในวันนี้: `GoogleVerifier.external_subject` โยน `InvalidIdToken("no Google client is configured")` เมื่อไม่มี client id และ cutover doc ระบุว่า owner ยังไม่ได้ตั้ง `IDENTITY_GOOGLE_CLIENT_IDS`
+- person path เปิดแล้วตั้งแต่ 2026-11-28: `IDENTITY_GOOGLE_CLIENT_IDS` มี client `finance-suite-web` (ก่อนหน้านั้น `GoogleVerifier.external_subject` โยน `InvalidIdToken("no Google client is configured")`); ยังไม่มี login จริงบน production
 - service client path ใช้งานจริงแล้ว: `posture-monitor` → `security-api` (2026-11-03) และ `mcp-hub` (ops record)
 - tenancy path (`/v1/signup`, `/v1/members`, `/v1/invitations`, `/v1/workspace`, `/v1/me/workspaces`, `/v1/installations`, `/v1/service/installations`) และ delegated token มีในโค้ดแล้ว แต่ทำงานเมื่อ `IDENTITY_TENANCY_MODE=on` เท่านั้น (ค่าเริ่มต้น `off`) และ signup เริ่มต้นเป็น `closed` (`IDENTITY_SIGNUP_MODE`); ค่าบน production ตอนนี้ [ต้องยืนยัน]
 - มี `/v1/internal/entitlement` ด้วย (`src/platform_identity/entitlement.py`) [ต้องยืนยัน] ว่าใครเรียกและ gate อะไร
@@ -71,7 +71,7 @@ Sources: `docs/DESIGN-2026-10-13.md` §6–§7, `PRODUCT.md` (Roadmap), `contrac
 
 | ID | As-Is → To-Be | Status | Owner | Evidence |
 |---|---|---|---|---|
-| G1 | person path ปิด (ไม่มี `IDENTITY_GOOGLE_CLIENT_IDS`) → owner login ด้วย Google ได้ | blocked | owner | `docs/PLATFORM-SERVICES-CUTOVER.md` step 3 (owner ตั้ง client id); `src/platform_identity/google.py` |
+| G1 | person path ปิด (ไม่มี `IDENTITY_GOOGLE_CLIENT_IDS`) → owner login ด้วย Google ได้ (client id ตั้งแล้ว 2026-11-28; เหลือทดสอบ login จริง) | todo | owner | `docs/PLATFORM-SERVICES-CUTOVER.md` step 3 (owner ตั้ง client id); `src/platform_identity/google.py` |
 | G2 | shadow รันอยู่ ยังไม่มีรายงาน parity → parity report + rollback rehearsal (steps 4–5) | todo | claude | `PRODUCT.md` Roadmap (planned [ต้องยืนยัน]) |
 | G3 | cells เชื่อ issuer `empire-platform` → เชื่อ issuer นี้, ล็อกอินรวม (step 6 cutover) | decide | owner | `PRODUCT.md` Roadmap: needs owner approval |
 | G4 | identity อยู่ใน DB ของ platform-empire → Neon project ของตัวเอง + logical replication, แล้วลบตารางเดิมหลัง 30 วัน (steps 7–8) | todo | claude | `docs/DESIGN-2026-10-13.md` §6–§7 |

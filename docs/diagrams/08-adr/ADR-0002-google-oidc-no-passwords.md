@@ -23,5 +23,5 @@
 
 ## Consequences
 
-- ถ้าไม่ตั้ง `IDENTITY_GOOGLE_CLIENT_IDS` จะปฏิเสธ Google token ทุกตัว ซึ่งเป็นสถานะ production ณ 2026-11-03 (`docs/PLATFORM-SERVICES-CUTOVER.md`)
+- ถ้าไม่ตั้ง `IDENTITY_GOOGLE_CLIENT_IDS` จะปฏิเสธ Google token ทุกตัว ซึ่งเป็นสถานะ production ณ 2026-11-03; ตั้งแล้ว 2026-11-28 (`docs/PLATFORM-SERVICES-CUTOVER.md` step 3)
 - เพิ่ม provider อื่นได้ภายหลังผ่าน prefix ของ subject (design เสนอ `external_issuer` คู่ `external_subject`, ยังไม่ทำ)

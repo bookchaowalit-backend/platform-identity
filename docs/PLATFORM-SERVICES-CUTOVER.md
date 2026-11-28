@@ -31,6 +31,9 @@ canonical permission (see [SHARED-RATE-LIMIT.md](SHARED-RATE-LIMIT.md),
    `railway run --service token-rotate -- python -m empire_platform.cells grant --workspace owner --cell <service>`.
 3. Owner: create a Google OAuth client ID and set `IDENTITY_GOOGLE_CLIENT_IDS`
    on identity-api. Without it `/v1/token` rejects every Google token.
+   Done 2026-11-28: web client `finance-suite-web` (Google Cloud project `solo-empire`) set on
+   identity-api and deployed; the value is also in Infisical `/platform-identity`. More clients go in
+   the same variable, comma-separated.
 4. Deploy identity-api from `main` (it is not connected to GitHub: `railway up`
    of a clean `git archive main`). This ships the shared scope bridge and picks up
    the staged variables. Check `/health`, `/readyz` and the JWKS.
@@ -100,9 +103,9 @@ Owner go 2026-11-03 ("Yes, activate").
   `security-api`) reads `/v1/audit` with 200; `references:read` for that client is
   refused with `invalid_scope`, as registered.
 
-Still open: step 3 (owner sets `IDENTITY_GOOGLE_CLIENT_IDS`; until then `/v1/token`
-rejects every Google token, so step 5, a person token per service, waits on it) and
-the `ai-gateway` / workflow worker service clients.
+Still open: step 5, a person token per service (step 3, `IDENTITY_GOOGLE_CLIENT_IDS`, was set on
+2026-11-28; no person token has been exchanged in production yet), and the `ai-gateway` / workflow
+worker service clients.
 
 ## Not covered yet
 

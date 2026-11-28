@@ -102,7 +102,7 @@ ERD: [09-erd.md](../docs/diagrams/09-erd.md). ไม่เก็บรหัส�
 
 | ระบบ | ทิศทาง | ใช้ทำอะไร | สถานะ | หลักฐาน |
 |---|---|---|---|---|
-| Google OIDC | identity → Google | ดึง JWKS ตรวจ id_token | โค้ดพร้อม; production ปฏิเสธทุก Google token เพราะ `IDENTITY_GOOGLE_CLIENT_IDS` ยังไม่ตั้ง | `google.py`, `docs/PLATFORM-SERVICES-CUTOVER.md` |
+| Google OIDC | identity → Google | ดึง JWKS ตรวจ id_token | ใช้งานได้: `IDENTITY_GOOGLE_CLIENT_IDS` ตั้งแล้ว 2026-11-28 (client `finance-suite-web`); ยังไม่มี person token จริงบน production | `google.py`, `docs/PLATFORM-SERVICES-CUTOVER.md` |
 | platform-empire | สองทาง | identity ดึง platform JWKS (`IDENTITY_PLATFORM_JWKS_URL`); platform เรียก decide แบบ shadow | live | `config.py`, `app.py` |
 | 8 Book Platform services | services → identity | ดึง JWKS; `JWT_ISSUER` = identity URL, audience `<svc>-api` | live ตั้งแต่ 2026-10-29 (security 2026-11-02) | ADR-0003, ops record |
 | Service clients (`posture-monitor`, `mcp-hub`) | client → identity | `client_credentials` + `private_key_jwt` | live 2026-11-03 | [ADR-0005](../docs/diagrams/08-adr/ADR-0005-service-clients-private-key-jwt.md), cutover doc |
